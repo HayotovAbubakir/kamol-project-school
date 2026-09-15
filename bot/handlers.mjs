@@ -38,19 +38,31 @@ function normalizeCode(text) {
   return t
 }
 
+function errorText(err) {
+  if (!err) return 'noma’lum xato'
+  if (typeof err === 'string') return err
+  return err.message || err.error_description || err.details || err.hint || String(err)
+}
+
 function dbHint(err) {
-  const msg = err?.message || String(err)
+  const msg = errorText(err)
   if (/telegram_links/i.test(msg) || /public_code/i.test(msg) || /PGRST/i.test(msg) || /relation/i.test(msg)) {
     return 'Baza yangilanmagan ko‘rinadi. Supabase SQL Editor da schema.sql ni Run qiling.'
   }
-  return 'Vaqtincha xato. Keyinroq qayta urinib ko‘ring.'
+  if (/Invalid API key|JWT|apikey|not authorized|permission denied|401|403/i.test(msg)) {
+    return 'Supabase kaliti noto‘g‘ri. Railway Variables da SUPABASE_SERVICE_ROLE_KEY ni service_role (anon emas) qilib qo‘ying.'
+  }
+  if (/fetch failed|ENOTFOUND|ECONNREFUSED|network|getaddrinfo|Timed out/i.test(msg)) {
+    return 'Supabase bilan aloqa yo‘q. VITE_SUPABASE_URL ni tekshiring (https://xxxx.supabase.co).'
+  }
+  return `Xato: ${String(msg).slice(0, 160)}`
 }
 
 async function safeReply(ctx, fn) {
   try {
     await fn()
   } catch (err) {
-    console.error('Handler error', err)
+    console.error('Handler error', errorText(err), err)
     try {
       await ctx.reply(dbHint(err))
     } catch {

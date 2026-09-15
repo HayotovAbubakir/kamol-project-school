@@ -3,14 +3,23 @@ import { createClient } from '@supabase/supabase-js'
 function requireEnv(name, aliases = []) {
   const keys = [name, ...aliases]
   for (const key of keys) {
-    const value = process.env[key]
-    if (value && String(value).trim()) return String(value).trim()
+    let value = process.env[key]
+    if (!value || !String(value).trim()) continue
+    value = String(value).trim()
+    // Railway/UI dan qo‘yilganda qo‘shtirnoq yopishib qolishi mumkin
+    if (
+      (value.startsWith('"') && value.endsWith('"'))
+      || (value.startsWith("'") && value.endsWith("'"))
+    ) {
+      value = value.slice(1, -1).trim()
+    }
+    if (value) return value
   }
   throw new Error(`Missing env: ${keys.join(' yoki ')}`)
 }
 
 export function createDb() {
-  const url = requireEnv('SUPABASE_URL', ['VITE_SUPABASE_URL'])
+  const url = requireEnv('SUPABASE_URL', ['VITE_SUPABASE_URL']).replace(/\/$/, '')
   const key = requireEnv('SUPABASE_SERVICE_ROLE_KEY')
   return createClient(url, key, {
     auth: { persistSession: false, autoRefreshToken: false },
@@ -30,10 +39,11 @@ export async function findStudentByCode(db, rawCode) {
 }
 
 export async function getLinkByChat(db, chatId) {
+  const id = Number(chatId)
   const { data: link, error } = await db
     .from('telegram_links')
     .select('chat_id, student_id, linked_at')
-    .eq('chat_id', chatId)
+    .eq('chat_id', id)
     .maybeSingle()
   if (error) throw error
   if (!link) return null
@@ -50,7 +60,7 @@ export async function getLinkByChat(db, chatId) {
 
 export async function linkChatToStudent(db, chatId, studentId) {
   const { error } = await db.from('telegram_links').upsert({
-    chat_id: chatId,
+    chat_id: Number(chatId),
     student_id: studentId,
     linked_at: new Date().toISOString(),
   })
@@ -58,7 +68,7 @@ export async function linkChatToStudent(db, chatId, studentId) {
 }
 
 export async function unlinkChat(db, chatId) {
-  const { error } = await db.from('telegram_links').delete().eq('chat_id', chatId)
+  const { error } = await db.from('telegram_links').delete().eq('chat_id', Number(chatId))
   if (error) throw error
 }
 

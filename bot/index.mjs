@@ -34,11 +34,19 @@ loadEnvFile(resolve(root, '.env.local'))
 loadEnvFile(resolve(root, '.env'))
 
 function requireEnv(name) {
-  const value = process.env[name]
+  let value = process.env[name]
   if (!value || !String(value).trim()) {
     throw new Error(`Missing env: ${name}`)
   }
-  return String(value).trim()
+  value = String(value).trim()
+  if (
+    (value.startsWith('"') && value.endsWith('"'))
+    || (value.startsWith("'") && value.endsWith("'"))
+  ) {
+    value = value.slice(1, -1).trim()
+  }
+  if (!value) throw new Error(`Missing env: ${name}`)
+  return value
 }
 
 async function notifyStudentChats(bot, db, studentId, text) {
@@ -114,8 +122,23 @@ function startRealtime(bot, db) {
 }
 
 async function main() {
+  console.log('Env check:', {
+    TELEGRAM_BOT_TOKEN: Boolean(process.env.TELEGRAM_BOT_TOKEN),
+    SUPABASE_SERVICE_ROLE_KEY: Boolean(process.env.SUPABASE_SERVICE_ROLE_KEY),
+    SUPABASE_URL: Boolean(process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL),
+  })
+
   const token = requireEnv('TELEGRAM_BOT_TOKEN')
   const db = createDb()
+
+  // Deploy paytida bazani tekshiramiz — xato bo‘lsa logda aniq chiqadi
+  const { error: pingError } = await db.from('students').select('id').limit(1)
+  if (pingError) {
+    console.error('Supabase ping failed:', pingError.message || pingError)
+    throw new Error(`Supabase ulanmadi: ${pingError.message || pingError.code || 'unknown'}`)
+  }
+  console.log('Supabase OK')
+
   const bot = new Bot(token)
 
   registerHandlers(bot, db)
