@@ -121,8 +121,8 @@ Noutbuk o‘chiq bo‘lsa ham bot ishlashi uchun Railway da deploy qilinadi.
    - `TELEGRAM_BOT_TOKEN`
    - `SUPABASE_SERVICE_ROLE_KEY`
    - `VITE_SUPABASE_URL` (yoki `SUPABASE_URL`)
-   - `TELEGRAM_WEBAPP_URL` — web ilovaning deploy qilingan HTTPS manzili
-4. Web ilovani (Vite build papkasi `dist`) Cloudflare Pages yoki boshqa HTTPS hostingga deploy qiling. Railway’dagi bot jarayoni web ilovani o‘zi host qilmaydi.
+   - `TELEGRAM_WEBAPP_URL` — `https://hayotovabubakir.github.io/kamol-project-school/miniapp.html`
+4. Vite `miniapp.html` ni ERP saytidan alohida, yengil Telegram Mini App sifatida build qiladi (`/miniapp.html`). O‘quvchi va o‘qituvchi ekranlari hozir demo topshiriqlarni ko‘rsatadi.
 5. Start command: `node bot/index.mjs` (`railway.json` da bor). Bot menyusida va asosiy klaviaturada “Ilovani ochish” tugmasi paydo bo‘ladi.
 
 Lokal PM2 ni o‘chirish: `npm run bot:uninstall-local`

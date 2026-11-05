@@ -1,0 +1,107 @@
+@import "tailwindcss/theme.css" layer(theme);
+@import "tailwindcss/utilities.css" layer(utilities);
+
+:root {
+  color-scheme: dark;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  --mini-bg: #101a17;
+  --mini-card: #182522;
+  --mini-text: #f4f7f5;
+  --mini-muted: #97a9a2;
+  --mini-accent: #73b7a0;
+  --mini-accent-text: #10211b;
+  --mini-border: rgb(255 255 255 / 8%);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#miniapp-root {
+  min-width: 320px;
+  min-height: 100%;
+  margin: 0;
+}
+
+body {
+  background:
+    radial-gradient(ellipse at 92% 0%, rgb(61 119 95 / 19%), transparent 48%),
+    var(--mini-bg);
+}
+
+button {
+  color: inherit;
+  font: inherit;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.miniapp {
+  color: var(--mini-text);
+}
+
+.brand-mark,
+.subject-icon {
+  background: color-mix(in srgb, var(--mini-accent) 15%, var(--mini-card));
+  color: var(--mini-accent);
+}
+
+.app-badge,
+.role-switch {
+  background: color-mix(in srgb, var(--mini-card) 86%, transparent);
+  border: 1px solid var(--mini-border);
+}
+
+.task-card {
+  background: color-mix(in srgb, var(--mini-card) 92%, transparent);
+  border-color: var(--mini-border);
+}
+
+.task-count,
+.task-status-new {
+  background: color-mix(in srgb, var(--mini-accent) 16%, transparent);
+  color: var(--mini-accent);
+}
+
+.task-status-active {
+  background: color-mix(in srgb, #f3b84b 14%, transparent);
+  color: #f3c66e;
+}
+
+.subject-icon-violet {
+  background: rgb(167 139 250 / 12%);
+  color: #b6a1ff;
+}
+
+.subject-icon-blue {
+  background: rgb(96 165 250 / 12%);
+  color: #78b6ff;
+}
+
+.subject-icon-amber {
+  background: rgb(251 191 36 / 12%);
+  color: #f3c66e;
+}
+
+.role-option {
+  border: 0;
+  background: transparent;
+  color: var(--mini-muted);
+  cursor: pointer;
+}
+
+.role-option:focus-visible {
+  outline: 2px solid var(--mini-accent);
+  outline-offset: 2px;
+}
+
+.role-option-active {
+  background: var(--mini-accent);
+  color: var(--mini-accent-text);
+  box-shadow: 0 2px 10px color-mix(in srgb, var(--mini-accent) 20%, transparent);
+}

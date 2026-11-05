@@ -54,10 +54,7 @@ function requireEnv(name) {
 
 function getMiniAppUrl() {
   const rawUrl = process.env.TELEGRAM_WEBAPP_URL?.trim()
-  if (!rawUrl) {
-    console.warn('TELEGRAM_WEBAPP_URL sozlanmagan — Telegram Mini App tugmasi ko‘rsatilmaydi')
-    return null
-  }
+    || 'https://hayotovabubakir.github.io/kamol-project-school/miniapp.html'
 
   let url
   try {
@@ -69,6 +66,8 @@ function getMiniAppUrl() {
   if (url.protocol !== 'https:' || url.username || url.password) {
     throw new Error('TELEGRAM_WEBAPP_URL HTTPS manzil bo‘lishi va login/parol saqlamasligi kerak')
   }
+
+  if (url.pathname.endsWith('/')) url.pathname += 'miniapp.html'
 
   return url.toString()
 }
