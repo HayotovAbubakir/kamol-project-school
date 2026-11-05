@@ -5,7 +5,7 @@ export default function BrandLogo({ className = '' }) {
   const { isDark } = useTheme()
   return (
     <img
-      src={isDark ? '/logo-dark.png?v=5' : '/logo.png?v=5'}
+      src={`${import.meta.env.BASE_URL}${isDark ? 'logo-dark.png' : 'logo.png'}?v=5`}
       alt="KAMOL PROJECT SCHOOL"
       className={`brand-logo${className ? ` ${className}` : ''}`}
       draggable={false}
