@@ -48,6 +48,8 @@ export default function AdminStudents() {
   const [error, setError] = useState('')
   const [saving, setSaving] = useState(false)
   const [payOpen, setPayOpen] = useState(false)
+  const [newCredentials, setNewCredentials] = useState(null)
+  const [credentialsCopied, setCredentialsCopied] = useState(false)
   const [payAmount, setPayAmount] = useState('')
   const [paying, setPaying] = useState(false)
   const [addGroupId, setAddGroupId] = useState('')
@@ -237,6 +239,10 @@ export default function AdminStudents() {
       } else {
         const created = await addStudent(payload)
         if (created?.id) setSelectedId(created.id)
+        if (created?.credentials) {
+          setCredentialsCopied(false)
+          setNewCredentials(created.credentials)
+        }
       }
       setForm(emptyForm())
       setOpen(false)
@@ -630,6 +636,39 @@ export default function AdminStudents() {
             />
           </div>
         </form>
+      </Modal>
+
+      <Modal
+        open={Boolean(newCredentials)}
+        title="O‘quvchi kirish ma’lumotlari"
+        onClose={() => setNewCredentials(null)}
+        actions={(
+          <button type="button" className="btn btn-primary" onClick={() => setNewCredentials(null)}>
+            Tayyor
+          </button>
+        )}
+      >
+        {newCredentials ? (
+          <div className="entity-form">
+            <p className="text-sm text-muted">
+              Parol xavfsizlik uchun faqat hozir ko‘rsatiladi. Nusxalab o‘quvchiga yetkazing.
+            </p>
+            <div className="detail-meta-grid">
+              <div className="detail-meta-item"><span>Login</span><strong>{newCredentials.username}</strong></div>
+              <div className="detail-meta-item"><span>Parol</span><strong>{newCredentials.password}</strong></div>
+            </div>
+            <button
+              type="button"
+              className="btn btn-outline btn-sm"
+              onClick={async () => {
+                await navigator.clipboard.writeText(`${newCredentials.username}\n${newCredentials.password}`)
+                setCredentialsCopied(true)
+              }}
+            >
+              <Copy size={14} /> {credentialsCopied ? 'Nusxalandi' : 'Login va parolni nusxalash'}
+            </button>
+          </div>
+        ) : null}
       </Modal>
     </PageEnter>
   )

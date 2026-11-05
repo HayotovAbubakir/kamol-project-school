@@ -80,6 +80,8 @@ function mapStudent(row, groupIds = []) {
     phone: row.phone || '',
     parentPhone: row.parent_phone || '',
     publicCode: row.public_code || '',
+    username: row.login || '',
+    authUserId: row.auth_user_id || null,
     monthlyFee: 0,
     joinedAt: row.joined_at,
     groupIds,
@@ -138,6 +140,7 @@ function mapProfile(row) {
     name: row.name,
     role: row.role,
     teacherId: row.teacher_id,
+    studentId: row.student_id,
   }
 }
 
@@ -363,7 +366,8 @@ export async function addGroup(payload, currentGroups = []) {
 
   // Eski DB: monthly_fee ustuni yo'q bo'lsa, usiz qayta urinadi
   if (error && /monthly_fee|PGRST204/i.test(`${error.code || ''} ${error.message} ${error.details || ''} ${error.hint || ''}`)) {
-    const { monthly_fee: _fee, ...withoutFee } = row
+    const withoutFee = { ...row }
+    delete withoutFee.monthly_fee
     ;({ data, error } = await db.from('groups').insert(withoutFee).select().single())
   }
 
@@ -422,7 +426,8 @@ export async function updateGroup(id, updates, currentGroups = []) {
   if (Object.keys(patch).length) {
     const { error } = await db.from('groups').update(patch).eq('id', id)
     if (error && patch.monthly_fee != null && /monthly_fee|PGRST204/i.test(`${error.code || ''} ${error.message}`)) {
-      const { monthly_fee: _fee, ...withoutFee } = patch
+      const withoutFee = { ...patch }
+      delete withoutFee.monthly_fee
       const { error: retryError } = await db.from('groups').update(withoutFee).eq('id', id)
       if (retryError) throwDbError(retryError, 'domain.error.groupSaveFailed')
     } else if (error) {
@@ -458,13 +463,103 @@ export async function addStudent(payload) {
   }).select().single()
   if (error) throw error
 
-  if (groupIds.length) {
-    const { error: linkError } = await db.from('group_students').insert(
-      groupIds.map((groupId) => ({ group_id: groupId, student_id: data.id })),
-    )
-    if (linkError) throw linkError
+  let credentials
+  try {
+    if (groupIds.length) {
+      const { error: linkError } = await db.from('group_students').insert(
+        groupIds.map((groupId) => ({ group_id: groupId, student_id: data.id })),
+      )
+      if (linkError) throw linkError
+    }
+
+    credentials = await createStudentCredentials(db, {
+      studentId: data.id,
+      name,
+    })
+    const { error: accountLinkError } = await db.from('students').update({
+      login: credentials.username,
+      auth_user_id: credentials.userId,
+    }).eq('id', data.id)
+    if (accountLinkError) throw accountLinkError
+  } catch (error) {
+    await db.from('group_students').delete().eq('student_id', data.id)
+    await db.from('students').delete().eq('id', data.id)
+    throw error
   }
-  return mapStudent(data, groupIds)
+
+  return {
+    ...mapStudent({ ...data, login: credentials.username, auth_user_id: credentials.userId }, groupIds),
+    credentials: {
+      username: credentials.username,
+      password: credentials.password,
+    },
+  }
+}
+
+function studentUsernameBase(name) {
+  const transliterated = String(name || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replaceAll('ў', 'u')
+    .replaceAll('қ', 'q')
+    .replaceAll('ғ', 'g')
+    .replaceAll('ҳ', 'h')
+    .replaceAll('ш', 'sh')
+    .replaceAll('ч', 'ch')
+    .replaceAll('ё', 'yo')
+    .replaceAll('ю', 'yu')
+    .replaceAll('я', 'ya')
+    .replaceAll('ъ', '')
+    .replaceAll('ь', '')
+    .replaceAll('й', 'y')
+    .replaceAll('а', 'a')
+    .replaceAll('б', 'b')
+    .replaceAll('в', 'v')
+    .replaceAll('д', 'd')
+    .replaceAll('е', 'e')
+    .replaceAll('з', 'z')
+    .replaceAll('и', 'i')
+    .replaceAll('к', 'k')
+    .replaceAll('л', 'l')
+    .replaceAll('м', 'm')
+    .replaceAll('н', 'n')
+    .replaceAll('о', 'o')
+    .replaceAll('п', 'p')
+    .replaceAll('р', 'r')
+    .replaceAll('с', 's')
+    .replaceAll('т', 't')
+    .replaceAll('у', 'u')
+    .replaceAll('ф', 'f')
+    .replaceAll('х', 'x')
+    .replaceAll('э', 'e')
+    .replaceAll('ц', 'ts')
+    .replaceAll('ж', 'j')
+    .replace(/[^a-z0-9]/g, '')
+  return transliterated || 'student'
+}
+
+async function createStudentCredentials(db, { studentId, name }) {
+  const base = studentUsernameBase(name)
+  let username = base
+  let suffix = 1
+  while (true) {
+    const { data: existing, error } = await db.from('profiles').select('id').eq('username', username).maybeSingle()
+    if (error) throw error
+    if (!existing) break
+    username = `${base}${suffix}`
+    suffix += 1
+  }
+
+  const password = `kp${String(crypto.getRandomValues(new Uint32Array(1))[0] % 100000).padStart(5, '0')}s`
+  const user = await createLinkedAccount({
+    username,
+    password,
+    name,
+    role: 'student',
+    studentId,
+  })
+  return { username, password, userId: user.id }
 }
 
 export async function updateStudent(id, updates) {
@@ -622,14 +717,34 @@ async function restoreSession(db, session) {
   }
 }
 
-async function upsertLinkedProfile(db, { userId, username, name, role, teacherId }) {
-  const { error } = await db.from('profiles').upsert({
+async function upsertLinkedProfile(db, { userId, username, name, role, teacherId, studentId }) {
+  const profileData = {
     id: userId,
     username,
     name,
     role,
     teacher_id: teacherId || null,
-  })
+    student_id: studentId || null,
+  }
+  const { data: existing, error: selectError } = await db
+    .from('profiles')
+    .select('id, username, name, role, teacher_id, student_id')
+    .eq('id', userId)
+    .maybeSingle()
+  if (selectError) throw selectError
+  if (
+    existing
+    && existing.username === profileData.username
+    && existing.name === profileData.name
+    && existing.role === profileData.role
+    && existing.teacher_id === profileData.teacher_id
+    && existing.student_id === profileData.student_id
+  ) return
+
+  const result = existing
+    ? await db.from('profiles').update(profileData).eq('id', userId)
+    : await db.from('profiles').insert(profileData)
+  const { error } = result
   if (error) throw error
 }
 
@@ -672,7 +787,7 @@ async function linkExistingTeacherAccount(db, {
   return authUser
 }
 
-async function createLinkedAccount({ username, password, name, role, teacherId = null }) {
+async function createLinkedAccount({ username, password, name, role, teacherId = null, studentId = null }) {
   const db = requireClient()
   const uname = normalizeUsername(username)
   const email = usernameToEmail(uname)
@@ -692,6 +807,7 @@ async function createLinkedAccount({ username, password, name, role, teacherId =
         name,
         role,
         teacher_id: teacherId || '',
+        student_id: studentId || '',
       },
     },
   })
@@ -731,6 +847,7 @@ async function createLinkedAccount({ username, password, name, role, teacherId =
     name,
     role,
     teacherId,
+    studentId,
   })
 
   // Confirm email yoqilgan bo‘lsa session bo‘lmaydi — login ishlamaydi
@@ -800,6 +917,15 @@ export async function updateOwnCredentials({ username, password }) {
   }
 
   return { username: uname }
+}
+
+export async function addAdminUser({ name, username, password }) {
+  return createLinkedAccount({
+    name,
+    username,
+    password,
+    role: 'admin',
+  })
 }
 
 export async function removeAdminUser(id) {

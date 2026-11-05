@@ -54,7 +54,9 @@ function requireEnv(name) {
 
 function getMiniAppUrl() {
   const rawUrl = process.env.TELEGRAM_WEBAPP_URL?.trim()
-    || 'https://hayotovabubakir.github.io/kamol-project-school/miniapp.html'
+  if (!rawUrl) {
+    throw new Error('TELEGRAM_WEBAPP_URL sozlanmagan: Cloudflare Pages bergan haqiqiy HTTPS URLni kiriting')
+  }
 
   let url
   try {
@@ -65,6 +67,9 @@ function getMiniAppUrl() {
 
   if (url.protocol !== 'https:' || url.username || url.password) {
     throw new Error('TELEGRAM_WEBAPP_URL HTTPS manzil bo‘lishi va login/parol saqlamasligi kerak')
+  }
+  if (url.hostname.endsWith('.github.io') || url.hostname === 'example.com' || url.hostname.endsWith('.example.com')) {
+    throw new Error('TELEGRAM_WEBAPP_URL ishlamaydigan GitHub Pages yoki namuna URL: haqiqiy public hosting manzilini kiriting')
   }
 
   if (url.pathname.endsWith('/')) url.pathname += 'miniapp.html'
@@ -174,6 +179,27 @@ async function main() {
         web_app: { url: miniAppUrl },
       },
     })
+    const { data: linkedChats, error: linkedChatsError } = await db
+      .from('telegram_links')
+      .select('chat_id')
+    if (linkedChatsError) {
+      console.error('Telegram chat menu refresh failed:', linkedChatsError.message || linkedChatsError)
+    } else {
+      for (const { chat_id: chatId } of linkedChats || []) {
+        try {
+          await bot.api.setChatMenuButton({
+            chat_id: chatId,
+            menu_button: {
+              type: 'web_app',
+              text: 'Ilovani ochish',
+              web_app: { url: miniAppUrl },
+            },
+          })
+        } catch (error) {
+          console.error(`Telegram chat menu refresh failed for ${chatId}:`, error.message || error)
+        }
+      }
+    }
     console.log('Telegram Mini App menyu tugmasi sozlandi')
   }
   startRealtime(bot, db)

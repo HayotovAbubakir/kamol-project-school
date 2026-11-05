@@ -23,6 +23,7 @@ export function removeKeyboard() {
 
 export const BOT_COMMANDS = [
   { command: 'start', description: 'Boshlash / qayta ulash' },
+  { command: 'login', description: 'Staff kod bilan kirish' },
   { command: 'holat', description: 'Shu oy to‘lov va guruhlar' },
   { command: 'davomat', description: 'Oxirgi 14 kun davomat' },
   { command: 'tolov', description: 'Jami to‘lovlar tarixi' },

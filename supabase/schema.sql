@@ -31,6 +31,14 @@ create table if not exists public.profiles (
   created_at timestamptz not null default now()
 );
 
+alter table public.profiles
+  add column if not exists student_id uuid;
+
+alter table public.profiles drop constraint if exists profiles_role_check;
+alter table public.profiles
+  add constraint profiles_role_check
+  check (role in ('owner', 'admin', 'teacher', 'student', 'reception'));
+
 create or replace function public.current_role()
 returns text
 language sql
@@ -50,7 +58,7 @@ set search_path = public
 as $$
   select exists (
     select 1 from public.profiles
-    where id = auth.uid() and role in ('owner', 'admin')
+    where id = auth.uid() and role in ('owner', 'admin', 'reception')
   );
 $$;
 
@@ -123,6 +131,29 @@ create table if not exists public.students (
   joined_at date not null default current_date,
   created_at timestamptz not null default now()
 );
+
+alter table public.students
+  add column if not exists login text,
+  add column if not exists auth_user_id uuid;
+
+do $$
+begin
+  if not exists (select 1 from pg_constraint where conname = 'profiles_student_id_fkey') then
+    alter table public.profiles
+      add constraint profiles_student_id_fkey
+      foreign key (student_id) references public.students(id) on delete set null;
+  end if;
+  if not exists (select 1 from pg_constraint where conname = 'students_auth_user_id_fkey') then
+    alter table public.students
+      add constraint students_auth_user_id_fkey
+      foreign key (auth_user_id) references auth.users(id) on delete set null;
+  end if;
+end $$;
+
+create unique index if not exists students_login_uidx
+  on public.students (login) where login is not null;
+create unique index if not exists students_auth_user_id_uidx
+  on public.students (auth_user_id) where auth_user_id is not null;
 
 -- Ota-ona Telegram bot uchun qisqa takrorlanmas ID (KS-XXXXXX)
 alter table public.students
@@ -323,26 +354,34 @@ set search_path = public
 as $$
 declare
   meta_teacher uuid;
+  meta_student uuid;
 begin
   begin
     meta_teacher := nullif(new.raw_user_meta_data->>'teacher_id', '')::uuid;
   exception when others then
     meta_teacher := null;
   end;
+  begin
+    meta_student := nullif(new.raw_user_meta_data->>'student_id', '')::uuid;
+  exception when others then
+    meta_student := null;
+  end;
 
-  insert into public.profiles (id, username, name, role, teacher_id)
+  insert into public.profiles (id, username, name, role, teacher_id, student_id)
   values (
     new.id,
     coalesce(new.raw_user_meta_data->>'username', split_part(new.email, '@', 1)),
     coalesce(new.raw_user_meta_data->>'name', split_part(new.email, '@', 1)),
     coalesce(new.raw_user_meta_data->>'role', 'admin'),
-    meta_teacher
+    meta_teacher,
+    meta_student
   )
   on conflict (id) do update set
     username = excluded.username,
     name = excluded.name,
     role = excluded.role,
-    teacher_id = coalesce(excluded.teacher_id, public.profiles.teacher_id);
+    teacher_id = coalesce(excluded.teacher_id, public.profiles.teacher_id),
+    student_id = coalesce(excluded.student_id, public.profiles.student_id);
 
   return new;
 end;
@@ -493,6 +532,17 @@ create policy "groups_teacher_select" on public.groups
     )
   );
 
+drop policy if exists "groups_student_select" on public.groups;
+create policy "groups_student_select" on public.groups
+  for select to authenticated
+  using (
+    exists (
+      select 1 from public.group_students gs
+      where gs.group_id = groups.id
+        and gs.student_id = (select student_id from public.profiles where id = auth.uid())
+    )
+  );
+
 create policy "students_staff_all" on public.students
   for all to authenticated
   using (public.is_staff())
@@ -626,3 +676,298 @@ where id = (select id from auth.users where email = 'owner@kamol.school');
 update public.profiles
 set name = 'Administrator', role = 'admin', username = 'admin'
 where id = (select id from auth.users where email = 'admin@kamol.school');
+
+-- ============================================================
+-- 13) Mini App / Homework module
+-- ============================================================
+alter table public.students add column if not exists telegram_id bigint;
+alter table public.teachers add column if not exists telegram_id bigint;
+alter table public.profiles add column if not exists telegram_id bigint;
+
+create table if not exists public.staff_codes (
+  id uuid primary key default gen_random_uuid(),
+  code text not null unique,
+  role text not null check (role in ('reception', 'owner', 'teacher')),
+  user_id uuid references auth.users(id) on delete set null,
+  created_by uuid references auth.users(id) on delete set null,
+  is_active boolean not null default true,
+  created_at timestamptz not null default now()
+);
+
+create table if not exists public.homework (
+  id uuid primary key default gen_random_uuid(),
+  group_id uuid not null references public.groups(id) on delete cascade,
+  teacher_id uuid references public.teachers(id) on delete set null,
+  title text not null,
+  description text not null default '',
+  due_at timestamptz,
+  deadline timestamptz,
+  file_url text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create table if not exists public.homework_submissions (
+  id uuid primary key default gen_random_uuid(),
+  homework_id uuid not null references public.homework(id) on delete cascade,
+  student_id uuid not null references public.students(id) on delete cascade,
+  file_url text,
+  text_answer text not null default '',
+  content_text text not null default '',
+  status text not null default 'pending' check (status in ('pending', 'approved', 'rejected')),
+  review_note text not null default '',
+  feedback text not null default '',
+  submitted_at timestamptz not null default now(),
+  reviewed_by uuid references public.profiles(id) on delete set null,
+  reviewed_at timestamptz,
+  created_at timestamptz not null default now()
+);
+
+alter table public.homework add column if not exists deadline timestamptz;
+alter table public.homework_submissions
+  add column if not exists content_text text not null default '',
+  add column if not exists feedback text not null default '';
+
+update public.homework set deadline = due_at where deadline is null;
+update public.homework_submissions
+set content_text = text_answer, feedback = review_note
+where content_text = '' or feedback = '';
+
+create or replace function public.sync_homework_compat_fields()
+returns trigger
+language plpgsql
+as $$
+begin
+  new.due_at := coalesce(new.deadline, new.due_at);
+  new.deadline := coalesce(new.deadline, new.due_at);
+  return new;
+end;
+$$;
+
+create or replace function public.sync_homework_submission_compat_fields()
+returns trigger
+language plpgsql
+as $$
+begin
+  if tg_op = 'INSERT' then
+    new.content_text := coalesce(nullif(new.content_text, ''), new.text_answer, '');
+    new.text_answer := new.content_text;
+    new.feedback := coalesce(nullif(new.feedback, ''), new.review_note, '');
+    new.review_note := new.feedback;
+    return new;
+  end if;
+
+  if new.content_text is distinct from old.content_text then
+    new.text_answer := new.content_text;
+  elsif new.text_answer is distinct from old.text_answer then
+    new.content_text := new.text_answer;
+  end if;
+  if new.feedback is distinct from old.feedback then
+    new.review_note := new.feedback;
+  elsif new.review_note is distinct from old.review_note then
+    new.feedback := new.review_note;
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists homework_sync_compat_fields on public.homework;
+create trigger homework_sync_compat_fields
+  before insert or update on public.homework
+  for each row execute function public.sync_homework_compat_fields();
+
+drop trigger if exists homework_submissions_sync_compat_fields on public.homework_submissions;
+create trigger homework_submissions_sync_compat_fields
+  before insert or update on public.homework_submissions
+  for each row execute function public.sync_homework_submission_compat_fields();
+
+create unique index if not exists homework_submissions_unique
+  on public.homework_submissions (homework_id, student_id);
+
+create or replace function public.set_staff_code()
+returns trigger
+language plpgsql
+as $$
+begin
+  new.code := upper(trim(new.code));
+  return new;
+end;
+$$;
+
+drop trigger if exists staff_codes_code_bi on public.staff_codes;
+create trigger staff_codes_code_bi
+  before insert or update on public.staff_codes
+  for each row execute function public.set_staff_code();
+
+create or replace function public.sync_student_telegram_id()
+returns trigger
+language plpgsql
+as $$
+begin
+  if new.telegram_id is not null then
+    update public.students
+    set telegram_id = new.telegram_id
+    where id = new.student_id;
+  end if;
+  return new;
+end;
+$$;
+
+create or replace view public.monthly_homework_report
+with (security_invoker = true)
+as
+select
+  s.id as student_id,
+  s.name as student_name,
+  date_trunc('month', hs.submitted_at)::date as month_start,
+  count(hs.id) as total_submissions,
+  count(*) filter (where hs.status = 'approved') as approved_count,
+  count(*) filter (where hs.status = 'rejected') as rejected_count,
+  count(*) filter (where hs.status = 'pending') as pending_count
+from public.students s
+left join public.homework_submissions hs on hs.student_id = s.id
+where public.is_staff()
+group by s.id, s.name, date_trunc('month', hs.submitted_at)::date;
+
+drop trigger if exists telegram_links_sync_telegram_id on public.telegram_links;
+create trigger telegram_links_sync_telegram_id
+  after insert or update on public.telegram_links
+  for each row execute function public.sync_student_telegram_id();
+
+drop policy if exists "homework_staff_access" on public.homework;
+drop policy if exists "homework_student_select" on public.homework;
+drop policy if exists "homework_submissions_staff_access" on public.homework_submissions;
+drop policy if exists "homework_submissions_student_select" on public.homework_submissions;
+drop policy if exists "homework_submissions_student_insert" on public.homework_submissions;
+drop policy if exists "homework_submissions_student_update" on public.homework_submissions;
+drop policy if exists "staff_codes_staff_access" on public.staff_codes;
+drop policy if exists "group_students_student_select" on public.group_students;
+
+create policy "homework_staff_access" on public.homework
+  for all to authenticated
+  using (
+    public.is_staff()
+    or (
+      public.current_role() = 'teacher'
+      and teacher_id = (select teacher_id from public.profiles where id = auth.uid())
+      and exists (
+        select 1 from public.groups g
+        where g.id = homework.group_id
+          and public.group_involves_teacher(
+            g,
+            (select teacher_id from public.profiles where id = auth.uid())
+          )
+      )
+    )
+  )
+  with check (
+    public.is_staff()
+    or (
+      public.current_role() = 'teacher'
+      and teacher_id = (select teacher_id from public.profiles where id = auth.uid())
+      and exists (
+        select 1 from public.groups g
+        where g.id = homework.group_id
+          and public.group_involves_teacher(
+            g,
+            (select teacher_id from public.profiles where id = auth.uid())
+          )
+      )
+    )
+  );
+
+create policy "homework_student_select" on public.homework
+  for select to authenticated
+  using (
+    public.current_role() = 'student'
+    and exists (
+      select 1 from public.profiles p
+      join public.group_students gs on gs.student_id = p.student_id
+      where p.id = auth.uid() and gs.group_id = homework.group_id
+    )
+  );
+
+create policy "homework_submissions_staff_access" on public.homework_submissions
+  for all to authenticated
+  using (
+    public.is_staff()
+    or exists (
+      select 1 from public.homework h
+      where h.id = homework_id
+        and h.teacher_id = (select teacher_id from public.profiles where id = auth.uid())
+    )
+  )
+  with check (
+    public.is_staff()
+    or exists (
+      select 1 from public.homework h
+      where h.id = homework_id
+        and h.teacher_id = (select teacher_id from public.profiles where id = auth.uid())
+    )
+  );
+
+create policy "homework_submissions_student_select" on public.homework_submissions
+  for select to authenticated
+  using (
+    student_id = (select student_id from public.profiles where id = auth.uid())
+  );
+
+create policy "homework_submissions_student_insert" on public.homework_submissions
+  for insert to authenticated
+  with check (
+    student_id = (select student_id from public.profiles where id = auth.uid())
+    and status = 'pending'
+    and coalesce(feedback, '') = ''
+    and reviewed_by is null
+    and reviewed_at is null
+    and exists (
+      select 1
+      from public.homework h
+      join public.group_students gs on gs.group_id = h.group_id
+      where h.id = homework_id
+        and gs.student_id = (select student_id from public.profiles where id = auth.uid())
+    )
+  );
+
+create policy "homework_submissions_student_update" on public.homework_submissions
+  for update to authenticated
+  using (
+    student_id = (select student_id from public.profiles where id = auth.uid())
+    and status in ('pending', 'rejected')
+    and exists (
+      select 1
+      from public.homework h
+      join public.group_students gs on gs.group_id = h.group_id
+      where h.id = homework_id
+        and gs.student_id = (select student_id from public.profiles where id = auth.uid())
+    )
+  )
+  with check (
+    student_id = (select student_id from public.profiles where id = auth.uid())
+    and status = 'pending'
+    and coalesce(feedback, '') = ''
+    and reviewed_by is null
+    and reviewed_at is null
+    and exists (
+      select 1
+      from public.homework h
+      join public.group_students gs on gs.group_id = h.group_id
+      where h.id = homework_id
+        and gs.student_id = (select student_id from public.profiles where id = auth.uid())
+    )
+  );
+
+create policy "group_students_student_select" on public.group_students
+  for select to authenticated
+  using (student_id = (select student_id from public.profiles where id = auth.uid()));
+
+create policy "staff_codes_staff_access" on public.staff_codes
+  for all to authenticated
+  using (public.is_staff())
+  with check (public.is_staff());
+
+alter table public.homework enable row level security;
+alter table public.homework_submissions enable row level security;
+alter table public.staff_codes enable row level security;
+
+grant select on public.monthly_homework_report to authenticated;

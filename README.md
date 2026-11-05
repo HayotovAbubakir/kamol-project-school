@@ -15,6 +15,8 @@
 | To'lovlar, maosh, xarajatlar | Tayyor |
 | Moliya va davomat chartlari | Tayyor |
 | **Supabase (Auth + Postgres)** | Tayyor |
+| Telegram Mini App (login, vazifalar, topshiriqlar) | Tayyorlanmoqda |
+| Cloudflare R2 uy vazifasi fayllari | Sozlash talab qilinadi |
 | Face ID biometrik | Keyingi bosqich |
 
 ---
@@ -121,9 +123,18 @@ Noutbuk o‘chiq bo‘lsa ham bot ishlashi uchun Railway da deploy qilinadi.
    - `TELEGRAM_BOT_TOKEN`
    - `SUPABASE_SERVICE_ROLE_KEY`
    - `VITE_SUPABASE_URL` (yoki `SUPABASE_URL`)
-   - `TELEGRAM_WEBAPP_URL` — `https://hayotovabubakir.github.io/kamol-project-school/miniapp.html`
-4. Vite `miniapp.html` ni ERP saytidan alohida, yengil Telegram Mini App sifatida build qiladi (`/miniapp.html`). O‘quvchi va o‘qituvchi ekranlari hozir demo topshiriqlarni ko‘rsatadi.
+   - `TELEGRAM_WEBAPP_URL` — Cloudflare Worker bergan public HTTPS URL va `/miniapp.html` yo‘li.
+4. Vite `miniapp.html` ni ERP saytidan alohida, yengil Telegram Mini App sifatida build qiladi (`/miniapp.html`). GitHub Actions `.github/workflows/deploy-worker.yml` orqali Cloudflare Worker'ga deploy qiladi. GitHub repository secrets sifatida `CLOUDFLARE_API_TOKEN` (Workers Scripts Edit ruxsati) va `CLOUDFLARE_ACCOUNT_ID` qo‘ying; Variables ichida `VITE_SUPABASE_URL` va `VITE_SUPABASE_ANON_KEY` bo‘lishi kerak.
 5. Start command: `node bot/index.mjs` (`railway.json` da bor). Bot menyusida va asosiy klaviaturada “Ilovani ochish” tugmasi paydo bo‘ladi.
+
+### Mini App va Cloudflare R2 sozlamalari
+
+- `supabase/schema.sql` ni Supabase SQL Editor’da ishga tushiring; u Mini App jadvallari, view va RLS siyosatlarini o‘rnatadi.
+- Supabase Auth’da email confirmation’ni o‘chiring, chunki yangi o‘quvchi login/paroli bilan darhol kirishi kerak.
+- `supabase/functions/r2-presign` Edge Function’ni deploy qiling va `CF_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET_NAME`, `R2_PUBLIC_URL` qiymatlarini Supabase Function secrets’da sozlang.
+- Bot serveri uchun ham shu R2 qiymatlarini environment variables sifatida bering. `R2_PUBLIC_URL` HTTPS orqali o‘qiladigan R2 custom domain yoki public bucket URL bo‘lishi kerak.
+- `kamol-files` bucket CORS sozlamasida deployed Mini App origin’iga `PUT` va `OPTIONS` metodlarini, `Content-Type` header’ini ruxsat qiling.
+- O‘quvchi paroli faqat yangi akkaunt yaratilganda bir marta ko‘rsatiladi; xavfsizlik uchun qayta ko‘rish imkoniyati yo‘q.
 
 Lokal PM2 ni o‘chirish: `npm run bot:uninstall-local`
 
