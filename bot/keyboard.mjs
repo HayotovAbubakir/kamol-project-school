@@ -7,12 +7,14 @@ export const BTN = {
   unlink: 'Uzish',
 }
 
-export function mainKeyboard() {
-  return new Keyboard()
+export function mainKeyboard(webAppUrl) {
+  const keyboard = new Keyboard()
     .text(BTN.holat).text(BTN.davomat).row()
     .text(BTN.tolov).text(BTN.unlink)
-    .resized()
-    .persistent()
+
+  if (webAppUrl) keyboard.row().webApp('Ilovani ochish', webAppUrl)
+
+  return keyboard.resized().persistent()
 }
 
 export function removeKeyboard() {

@@ -81,7 +81,7 @@ async function requireStudent(db, chatId, ctx) {
   return student
 }
 
-async function replyHolat(ctx, db, student) {
+async function replyHolat(ctx, db, student, webAppUrl) {
   const { month, year } = currentMonthYear()
   const groups = await getStudentGroups(db, student.id)
   const expected = groups.reduce((sum, g) => sum + (Number(g.monthly_fee) || 0), 0)
@@ -89,28 +89,28 @@ async function replyHolat(ctx, db, student) {
   const remaining = Math.max(0, expected - paid)
   await ctx.reply(
     statusText({ student, groups, expected, paid, remaining, month, year }),
-    { reply_markup: mainKeyboard() },
+    { reply_markup: mainKeyboard(webAppUrl) },
   )
 }
 
-async function replyDavomat(ctx, db, student) {
+async function replyDavomat(ctx, db, student, webAppUrl) {
   const rows = await getAttendanceForStudent(db, student.id, 14)
-  await ctx.reply(attendanceText(rows), { reply_markup: mainKeyboard() })
+  await ctx.reply(attendanceText(rows), { reply_markup: mainKeyboard(webAppUrl) })
 }
 
-async function replyTolov(ctx, db, student) {
+async function replyTolov(ctx, db, student, webAppUrl) {
   const groups = await getStudentGroups(db, student.id)
   const rows = await getPaymentsForStudent(db, student.id, 50)
-  await ctx.reply(paymentsText(rows, groups), { reply_markup: mainKeyboard() })
+  await ctx.reply(paymentsText(rows, groups), { reply_markup: mainKeyboard(webAppUrl) })
 }
 
-export function registerHandlers(bot, db) {
+export function registerHandlers(bot, db, webAppUrl) {
   bot.command('start', async (ctx) => {
     await safeReply(ctx, async () => {
       const chatId = ctx.chat.id
       const link = await getLinkByChat(db, chatId)
       if (link?.students) {
-        await ctx.reply(alreadyLinked(link.students), { reply_markup: mainKeyboard() })
+        await ctx.reply(alreadyLinked(link.students), { reply_markup: mainKeyboard(webAppUrl) })
         return
       }
       await ctx.reply(welcomeAskCode(), removeKeyboard())
@@ -121,7 +121,7 @@ export function registerHandlers(bot, db) {
     await safeReply(ctx, async () => {
       const student = await requireStudent(db, ctx.chat.id, ctx)
       if (!student) return
-      await ctx.reply(`${student.name}\n\n${menuText()}`, { reply_markup: mainKeyboard() })
+      await ctx.reply(`${student.name}\n\n${menuText()}`, { reply_markup: mainKeyboard(webAppUrl) })
     })
   })
 
@@ -129,7 +129,7 @@ export function registerHandlers(bot, db) {
     await safeReply(ctx, async () => {
       const student = await requireStudent(db, ctx.chat.id, ctx)
       if (!student) return
-      await replyHolat(ctx, db, student)
+      await replyHolat(ctx, db, student, webAppUrl)
     })
   })
 
@@ -137,7 +137,7 @@ export function registerHandlers(bot, db) {
     await safeReply(ctx, async () => {
       const student = await requireStudent(db, ctx.chat.id, ctx)
       if (!student) return
-      await replyDavomat(ctx, db, student)
+      await replyDavomat(ctx, db, student, webAppUrl)
     })
   })
 
@@ -145,7 +145,7 @@ export function registerHandlers(bot, db) {
     await safeReply(ctx, async () => {
       const student = await requireStudent(db, ctx.chat.id, ctx)
       if (!student) return
-      await replyTolov(ctx, db, student)
+      await replyTolov(ctx, db, student, webAppUrl)
     })
   })
 
@@ -167,15 +167,15 @@ export function registerHandlers(bot, db) {
       if (existing?.students) {
         const student = existing.students
         if (text === BTN.holat) {
-          await replyHolat(ctx, db, student)
+          await replyHolat(ctx, db, student, webAppUrl)
           return
         }
         if (text === BTN.davomat) {
-          await replyDavomat(ctx, db, student)
+          await replyDavomat(ctx, db, student, webAppUrl)
           return
         }
         if (text === BTN.tolov) {
-          await replyTolov(ctx, db, student)
+          await replyTolov(ctx, db, student, webAppUrl)
           return
         }
         if (text === BTN.unlink) {
@@ -183,7 +183,7 @@ export function registerHandlers(bot, db) {
           await ctx.reply(unlinked(), removeKeyboard())
           return
         }
-        await ctx.reply(menuText(), { reply_markup: mainKeyboard() })
+        await ctx.reply(menuText(), { reply_markup: mainKeyboard(webAppUrl) })
         return
       }
 
@@ -199,7 +199,7 @@ export function registerHandlers(bot, db) {
       }
 
       await linkChatToStudent(db, chatId, student.id)
-      await ctx.reply(linkedOk(student), { reply_markup: mainKeyboard() })
+      await ctx.reply(linkedOk(student), { reply_markup: mainKeyboard(webAppUrl) })
     })
   })
 }

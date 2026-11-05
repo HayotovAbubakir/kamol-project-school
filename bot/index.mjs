@@ -1,11 +1,14 @@
 import { readFileSync, existsSync } from 'node:fs'
 import { resolve, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { WebSocket } from 'ws'
 import { Bot } from 'grammy'
 import { createDb, getChatsForStudent } from './db.mjs'
 import { registerHandlers } from './handlers.mjs'
 import { BOT_COMMANDS } from './keyboard.mjs'
 import { attendancePush, paymentPush } from './messages.mjs'
+
+global.WebSocket = WebSocket
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const root = resolve(__dirname, '..')
@@ -47,6 +50,27 @@ function requireEnv(name) {
   }
   if (!value) throw new Error(`Missing env: ${name}`)
   return value
+}
+
+function getMiniAppUrl() {
+  const rawUrl = process.env.TELEGRAM_WEBAPP_URL?.trim()
+  if (!rawUrl) {
+    console.warn('TELEGRAM_WEBAPP_URL sozlanmagan — Telegram Mini App tugmasi ko‘rsatilmaydi')
+    return null
+  }
+
+  let url
+  try {
+    url = new URL(rawUrl)
+  } catch {
+    throw new Error('TELEGRAM_WEBAPP_URL yaroqli URL bo‘lishi kerak')
+  }
+
+  if (url.protocol !== 'https:' || url.username || url.password) {
+    throw new Error('TELEGRAM_WEBAPP_URL HTTPS manzil bo‘lishi va login/parol saqlamasligi kerak')
+  }
+
+  return url.toString()
 }
 
 async function notifyStudentChats(bot, db, studentId, text) {
@@ -129,6 +153,7 @@ async function main() {
   })
 
   const token = requireEnv('TELEGRAM_BOT_TOKEN')
+  const miniAppUrl = getMiniAppUrl()
   const db = createDb()
 
   // Deploy paytida bazani tekshiramiz — xato bo‘lsa logda aniq chiqadi
@@ -141,7 +166,17 @@ async function main() {
 
   const bot = new Bot(token)
 
-  registerHandlers(bot, db)
+  registerHandlers(bot, db, miniAppUrl)
+  if (miniAppUrl) {
+    await bot.api.setChatMenuButton({
+      menu_button: {
+        type: 'web_app',
+        text: 'Ilovani ochish',
+        web_app: { url: miniAppUrl },
+      },
+    })
+    console.log('Telegram Mini App menyu tugmasi sozlandi')
+  }
   startRealtime(bot, db)
 
   bot.catch((err) => {

@@ -121,7 +121,9 @@ Noutbuk o‘chiq bo‘lsa ham bot ishlashi uchun Railway da deploy qilinadi.
    - `TELEGRAM_BOT_TOKEN`
    - `SUPABASE_SERVICE_ROLE_KEY`
    - `VITE_SUPABASE_URL` (yoki `SUPABASE_URL`)
-4. Start command: `node bot/index.mjs` (`railway.json` da bor)
+   - `TELEGRAM_WEBAPP_URL` — web ilovaning deploy qilingan HTTPS manzili
+4. Web ilovani (Vite build papkasi `dist`) Cloudflare Pages yoki boshqa HTTPS hostingga deploy qiling. Railway’dagi bot jarayoni web ilovani o‘zi host qilmaydi.
+5. Start command: `node bot/index.mjs` (`railway.json` da bor). Bot menyusida va asosiy klaviaturada “Ilovani ochish” tugmasi paydo bo‘ladi.
 
 Lokal PM2 ni o‘chirish: `npm run bot:uninstall-local`
 

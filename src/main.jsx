@@ -14,7 +14,7 @@ createRoot(document.getElementById('root')).render(
       <ThemeProvider>
         <WallpaperProvider>
           <DialogProvider>
-            <BrowserRouter>
+            <BrowserRouter basename={import.meta.env.BASE_URL}>
               <App />
             </BrowserRouter>
           </DialogProvider>
