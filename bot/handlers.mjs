@@ -9,7 +9,6 @@ import {
   unlinkChat,
 } from './db.mjs'
 import { BTN, mainKeyboard, removeKeyboard } from './keyboard.mjs'
-import { uploadTelegramFileToR2 } from './r2.mjs'
 import {
   alreadyLinked,
   attendanceText,
@@ -39,34 +38,17 @@ function normalizeCode(text) {
   return t
 }
 
-function errorText(err) {
-  if (!err) return 'noma’lum xato'
-  if (typeof err === 'string') return err
-  return err.message || err.error_description || err.details || err.hint || String(err)
-}
-
 function dbHint(err) {
-  const msg = errorText(err)
-  if (/telegram_links/i.test(msg) || /public_code/i.test(msg) || /PGRST/i.test(msg) || /relation/i.test(msg)) {
-    return 'Baza yangilanmagan ko‘rinadi. Supabase SQL Editor da schema.sql ni Run qiling.'
-  }
-  if (/Invalid API key|JWT|apikey|not authorized|permission denied|401|403/i.test(msg)) {
-    return 'Supabase kaliti noto‘g‘ri. Railway Variables da SUPABASE_SERVICE_ROLE_KEY ni service_role (anon emas) qilib qo‘ying.'
-  }
-  if (/R2|Cloudflare/i.test(msg)) {
-    return 'Cloudflare R2 sozlamasi to‘liq emas. CF_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY va R2_PUBLIC_URL ni tekshiring.'
-  }
-  if (/fetch failed|ENOTFOUND|ECONNREFUSED|network|getaddrinfo|Timed out/i.test(msg)) {
-    return 'Supabase bilan aloqa yo‘q. VITE_SUPABASE_URL ni tekshiring (https://xxxx.supabase.co).'
-  }
-  return `Xato: ${String(msg).slice(0, 160)}`
+  const message = err instanceof Error ? err.message : ''
+  if (/R2|file content/i.test(message)) return 'Faylni xavfsiz saqlab bo‘lmadi. PDF yoki rasm yuboring.'
+  return 'So‘rovni bajarishda xatolik yuz berdi. Keyinroq qayta urinib ko‘ring.'
 }
 
 async function safeReply(ctx, fn) {
   try {
     await fn()
   } catch (err) {
-    console.error('Handler error', errorText(err), err)
+    console.error('Telegram handler failed', err instanceof Error ? err.name : 'UnknownError')
     try {
       await ctx.reply(dbHint(err))
     } catch {
@@ -122,7 +104,7 @@ async function saveHomeworkSubmission(db, studentId, homeworkId, payload) {
   return data
 }
 
-async function handleUploadMessage(ctx, db) {
+async function handleUploadMessage(ctx, db, token) {
   const chatId = ctx.chat.id
   const existing = await getLinkByChat(db, chatId)
   if (!existing?.students) {
@@ -176,13 +158,13 @@ async function handleUploadMessage(ctx, db) {
   const remoteFile = fileInfo.file_path
   if (!remoteFile) throw new Error('Telegram fayl manzili topilmadi')
   const uploadName = fileName || remoteFile.split('/').pop() || `${Date.now()}.upload`
-  const fileUrl = `https://api.telegram.org/file/bot${process.env.TELEGRAM_BOT_TOKEN}/${remoteFile}`
+  const fileUrl = `https://api.telegram.org/file/bot${token}/${remoteFile}`
   const response = await fetch(fileUrl)
   if (!response.ok) {
     throw new Error('Telegram faylini yuklab olishda xatolik yuz berdi')
   }
 
-  const r2Result = await uploadTelegramFileToR2({
+  const r2Result = await db.uploadToR2({
     fileStream: response.body,
     fileName: uploadName,
     mimeType: contentType,
@@ -220,7 +202,8 @@ async function replyTolov(ctx, db, student, webAppUrl) {
   await ctx.reply(paymentsText(rows, groups), { reply_markup: mainKeyboard(webAppUrl) })
 }
 
-export function registerHandlers(bot, db, webAppUrl) {
+export function registerHandlers(bot, db, webAppUrl, token) {
+  if (!token) throw new Error('Telegram bot token is required.')
   async function setPrivateChatMenuButton(ctx) {
     if (ctx.chat?.type !== 'private' || !webAppUrl) return
 
@@ -332,13 +315,13 @@ export function registerHandlers(bot, db, webAppUrl) {
 
   bot.on('message:document', async (ctx) => {
     await safeReply(ctx, async () => {
-      await handleUploadMessage(ctx, db)
+      await handleUploadMessage(ctx, db, token)
     })
   })
 
   bot.on('message:photo', async (ctx) => {
     await safeReply(ctx, async () => {
-      await handleUploadMessage(ctx, db)
+      await handleUploadMessage(ctx, db, token)
     })
   })
 

@@ -1,5 +1,0 @@
-[functions.r2-presign]
-verify_jwt = false
-
-[functions.telegram-auth]
-verify_jwt = false
