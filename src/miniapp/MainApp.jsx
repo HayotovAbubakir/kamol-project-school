@@ -29,6 +29,7 @@ import {
   teachers as teacherData,
   telegram,
 } from '../lib/data/index.js'
+import { parseParentPhones } from '../lib/phone.js'
 
 const roleLabels = {
   student: 'O‘quvchi',
@@ -168,9 +169,12 @@ export default function MainApp() {
   const [submissionForm, setSubmissionForm] = useState({ text: '', file: null })
   const [submissionPreview, setSubmissionPreview] = useState('')
   const previewUrl = useRef('')
-  const [studentForm, setStudentForm] = useState({ name: '', phone: '', groupId: '' })
+  const [studentForm, setStudentForm] = useState({ name: '', phone: '', fatherPhone: '', motherPhone: '', groupId: '' })
+  const [editingStudentId, setEditingStudentId] = useState(null)
   const [teacherForm, setTeacherForm] = useState({ name: '', phone: '', monthlySalary: '' })
-  const [groupForm, setGroupForm] = useState({ name: '', teacherId: '', monthlyFee: '', day: '1', startTime: '', endTime: '' })
+  const [editingTeacherId, setEditingTeacherId] = useState(null)
+  const [groupForm, setGroupForm] = useState({ name: '', teacherId: '', monthlyFee: '', schedule: [{ day: '0', startTime: '', endTime: '' }] })
+  const [editingGroupId, setEditingGroupId] = useState(null)
   const [paymentForm, setPaymentForm] = useState({ studentId: '', amount: '', month: String(new Date().getMonth() + 1), year: String(new Date().getFullYear()) })
   const [attendanceForm, setAttendanceForm] = useState({ studentId: '', groupId: '', status: 'present', note: '' })
   const [expenseForm, setExpenseForm] = useState({ title: '', amount: '', category: 'Operatsion' })
@@ -283,7 +287,7 @@ export default function MainApp() {
     if (!app || !app.isVersionAtLeast?.('6.1')) return undefined
     const onBack = () => setPage('dashboard')
     const formId = page === 'management'
-      ? 'mini-student-form'
+      ? editingGroupId ? 'mini-group-form' : editingTeacherId ? 'mini-teacher-form' : 'mini-student-form'
       : page === 'homework' && student && selectedHomework && !['pending', 'approved'].includes(selectedHomework.submission?.status)
         ? 'mini-submission-form'
         : null
@@ -295,7 +299,9 @@ export default function MainApp() {
     }
 
     if (formId) {
-      app.MainButton?.setText(page === 'management' ? 'O‘quvchini yaratish' : 'Vazifani topshirish')
+      app.MainButton?.setText(page === 'management'
+        ? editingGroupId ? 'Guruhni saqlash' : editingTeacherId ? 'O‘qituvchini saqlash' : editingStudentId ? 'O‘quvchini saqlash' : 'O‘quvchini yaratish'
+        : 'Vazifani topshirish')
       app.MainButton?.show()
       app.MainButton?.onClick(onMainClick)
     } else app.MainButton?.hide()
@@ -305,7 +311,7 @@ export default function MainApp() {
       app.MainButton?.offClick(onMainClick)
       app.MainButton?.hide()
     }
-  }, [page, student, selectedHomework])
+  }, [page, student, selectedHomework, editingStudentId, editingTeacherId, editingGroupId])
 
   useEffect(() => () => {
     if (previewUrl.current) URL.revokeObjectURL(previewUrl.current)
@@ -421,15 +427,28 @@ export default function MainApp() {
     setBusy(true)
     setError('')
     try {
-      const created = await studentData.create({
-        name: studentForm.name,
-        phone: studentForm.phone,
-        groupIds: studentForm.groupId ? [studentForm.groupId] : [],
-      })
-      setCredentials(created.credentials)
-      setInviteLinks({})
-      setStudentForm({ name: '', phone: '', groupId: '' })
-      setNotice('O‘quvchi va uning akkaunti yaratildi.')
+      if (editingStudentId) {
+        await studentData.update(editingStudentId, {
+          name: studentForm.name,
+          phone: studentForm.phone,
+          fatherPhone: studentForm.fatherPhone,
+          motherPhone: studentForm.motherPhone,
+        })
+        setEditingStudentId(null)
+        setNotice('O‘quvchi ma’lumotlari yangilandi.')
+      } else {
+        const created = await studentData.create({
+          name: studentForm.name,
+          phone: studentForm.phone,
+          fatherPhone: studentForm.fatherPhone,
+          motherPhone: studentForm.motherPhone,
+          groupIds: studentForm.groupId ? [studentForm.groupId] : [],
+        })
+        setCredentials(created.credentials)
+        setInviteLinks({})
+        setNotice('O‘quvchi va uning akkaunti yaratildi.')
+      }
+      setStudentForm({ name: '', phone: '', fatherPhone: '', motherPhone: '', groupId: '' })
       await refresh(user)
     } catch (createError) {
       setError(createError.message || 'O‘quvchini yaratib bo‘lmadi.')
@@ -449,17 +468,26 @@ export default function MainApp() {
         .map((value) => value.toString(16).padStart(2, '0')).join('')
       const password = [...crypto.getRandomValues(new Uint8Array(16))]
         .map((value) => value.toString(16).padStart(2, '0')).join('')
-      const created = await teacherData.create({
-        ...teacherForm,
-        username: `${base}${suffix}`,
-        password,
-      })
-      if (created.loginError) throw new Error(created.loginError)
+      if (editingTeacherId) {
+        await teacherData.update(editingTeacherId, {
+          name: teacherForm.name,
+          phone: teacherForm.phone,
+          monthlySalary: teacherForm.monthlySalary,
+        })
+        setEditingTeacherId(null)
+      } else {
+        const created = await teacherData.create({
+          ...teacherForm,
+          username: `${base}${suffix}`,
+          password,
+        })
+        if (created.loginError) throw new Error(created.loginError)
+        const linkedTeacher = (await teacherData.list()).find((item) => item.id === created.id)
+        if (linkedTeacher?.profile_id) await createInvite(linkedTeacher.profile_id)
+      }
       setTeacherForm({ name: '', phone: '', monthlySalary: '' })
       await refresh(user)
-      const linkedTeacher = (await teacherData.list()).find((item) => item.id === created.id)
-      if (linkedTeacher?.profile_id) await createInvite(linkedTeacher.profile_id)
-      setNotice('O‘qituvchi qo‘shildi. Telegram ulash havolasi yaratildi.')
+      setNotice(editingTeacherId ? 'O‘qituvchi ma’lumotlari yangilandi.' : 'O‘qituvchi qo‘shildi. Telegram ulash havolasi yaratildi.')
     } catch (createError) {
       setError(createError.message || 'O‘qituvchini qo‘shib bo‘lmadi.')
     } finally {
@@ -472,19 +500,107 @@ export default function MainApp() {
     setBusy(true)
     setError('')
     try {
-      await groupManagement.create({
+      const payload = {
         name: groupForm.name,
         teacherId: groupForm.teacherId,
         monthlyFee: groupForm.monthlyFee,
-        schedule: groupForm.startTime && groupForm.endTime
-          ? [{ day: Number(groupForm.day), startTime: groupForm.startTime, endTime: groupForm.endTime, teacherId: groupForm.teacherId }]
-          : [],
-      }, groups)
-      setGroupForm({ name: '', teacherId: '', monthlyFee: '', day: '1', startTime: '', endTime: '' })
-      setNotice('Guruh yaratildi.')
+        schedule: groupForm.schedule
+          .filter((slot) => slot.startTime || slot.endTime)
+          .map((slot) => ({ ...slot, day: Number(slot.day), teacherId: groupForm.teacherId })),
+      }
+      if (editingGroupId) {
+        await groupManagement.update(editingGroupId, payload, groups)
+        setEditingGroupId(null)
+        setNotice('Guruh ma’lumotlari yangilandi.')
+      } else {
+        await groupManagement.create(payload, groups)
+        setNotice('Guruh yaratildi.')
+      }
+      setGroupForm({ name: '', teacherId: '', monthlyFee: '', schedule: [{ day: '0', startTime: '', endTime: '' }] })
       await refresh(user)
     } catch (createError) {
       setError(createError.message || 'Guruhni yaratib bo‘lmadi.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  function editStudent(item) {
+    const parentPhones = parseParentPhones(item.parent_phone)
+    setEditingStudentId(item.id)
+    setEditingTeacherId(null)
+    setEditingGroupId(null)
+    setStudentForm({
+      name: item.name || '',
+      phone: item.phone || '',
+      ...parentPhones,
+      groupId: '',
+    })
+    setError('')
+    setNotice('')
+  }
+
+  function editTeacher(item) {
+    setEditingTeacherId(item.id)
+    setEditingStudentId(null)
+    setEditingGroupId(null)
+    setTeacherForm({
+      name: item.name || '',
+      phone: item.phone || '',
+      monthlySalary: String(item.monthlySalary || ''),
+    })
+    setError('')
+    setNotice('')
+  }
+
+  function editGroup(item) {
+    const schedule = Array.isArray(item.schedule) && item.schedule.length
+      ? item.schedule.map((slot) => ({
+        day: String(slot.day),
+        startTime: slot.startTime || '',
+        endTime: slot.endTime || '',
+      }))
+      : [{ day: '0', startTime: '', endTime: '' }]
+    setEditingGroupId(item.id)
+    setEditingStudentId(null)
+    setEditingTeacherId(null)
+    setGroupForm({
+      name: item.name || '',
+      teacherId: item.teacher_id || '',
+      monthlyFee: String(item.monthly_fee || ''),
+      schedule,
+    })
+    setError('')
+    setNotice('')
+  }
+
+  async function removeTeacher(item) {
+    if (!window.confirm(`${item.name} o‘qituvchisini o‘chirmoqchimisiz?`)) return
+    setBusy(true)
+    setError('')
+    try {
+      await teacherData.remove(item.id)
+      if (editingTeacherId === item.id) setEditingTeacherId(null)
+      setNotice('O‘qituvchi o‘chirildi.')
+      await refresh(user)
+    } catch (removeError) {
+      setError(removeError.message || 'O‘qituvchini o‘chirib bo‘lmadi.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function removeGroup(item) {
+    if (!window.confirm(`${item.name} guruhini o‘chirmoqchimisiz?`)) return
+    setBusy(true)
+    setError('')
+    try {
+      await groupManagement.remove(item.id)
+      if (editingGroupId === item.id) setEditingGroupId(null)
+      setNotice('Guruh o‘chirildi.')
+      await refresh(user)
+    } catch (removeError) {
+      setError(removeError.message || 'Guruhni o‘chirib bo‘lmadi.')
     } finally {
       setBusy(false)
     }
@@ -732,6 +848,23 @@ export default function MainApp() {
                 </>
               )}
             </div>
+            {teacher && (
+              <Panel className="mt-3">
+                <h2 className="font-bold">Guruhlarim va o‘quvchilarim</h2>
+                <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                  <div>
+                    <p className="text-xs font-semibold text-[var(--mini-muted)]">Guruhlar</p>
+                    {groups.map((group) => <p key={group.id} className="mt-2 text-sm">{group.name}</p>)}
+                    {!groups.length && <p className="mt-2 text-sm text-[var(--mini-muted)]">Guruh biriktirilmagan.</p>}
+                  </div>
+                  <div>
+                    <p className="text-xs font-semibold text-[var(--mini-muted)]">O‘quvchilar</p>
+                    {students.map((person) => <p key={person.id} className="mt-2 truncate text-sm">{person.name}</p>)}
+                    {!students.length && <p className="mt-2 text-sm text-[var(--mini-muted)]">O‘quvchi topilmadi.</p>}
+                  </div>
+                </div>
+              </Panel>
+            )}
           </section>
         )}
 
@@ -937,17 +1070,22 @@ export default function MainApp() {
           <section className="mt-7 grid gap-4">
             <h1 className="text-xl font-extrabold">O‘quvchilar boshqaruvi</h1>
             <Panel>
-              <h2 className="font-bold">Yangi o‘quvchi qo‘shish</h2>
+              <h2 className="font-bold">{editingStudentId ? 'O‘quvchi ma’lumotlarini tahrirlash' : 'Yangi o‘quvchi qo‘shish'}</h2>
               <form id="mini-student-form" className="mt-4 grid gap-3" onSubmit={saveStudent}>
                 <label className="mini-field"><span>Ism va familiya</span><input value={studentForm.name} onChange={(event) => setStudentForm({ ...studentForm, name: event.target.value })} required /></label>
                 <label className="mini-field"><span>Telefon</span><input type="tel" value={studentForm.phone} onChange={(event) => setStudentForm({ ...studentForm, phone: event.target.value })} required /></label>
-                <label className="mini-field"><span>Guruh</span>
+                <label className="mini-field"><span>Ota telefoni</span><input type="tel" value={studentForm.fatherPhone} onChange={(event) => setStudentForm({ ...studentForm, fatherPhone: event.target.value })} /></label>
+                <label className="mini-field"><span>Ona telefoni</span><input type="tel" value={studentForm.motherPhone} onChange={(event) => setStudentForm({ ...studentForm, motherPhone: event.target.value })} /></label>
+                {!editingStudentId && <label className="mini-field"><span>Guruh</span>
                   <select value={studentForm.groupId} onChange={(event) => setStudentForm({ ...studentForm, groupId: event.target.value })}>
                     <option value="">Keyinroq biriktiraman</option>
                     {groups.map((group) => <option key={group.id} value={group.id}>{group.name}</option>)}
                   </select>
-                </label>
-                <ActionButton type="submit" disabled={busy}><Plus size={16} /> {busy ? 'Saqlanmoqda…' : 'O‘quvchini yaratish'}</ActionButton>
+                </label>}
+                <div className="flex flex-wrap gap-2">
+                  <ActionButton type="submit" disabled={busy}><Plus size={16} /> {busy ? 'Saqlanmoqda…' : editingStudentId ? 'Saqlash' : 'O‘quvchini yaratish'}</ActionButton>
+                  {editingStudentId && <ActionButton className="mini-secondary" disabled={busy} onClick={() => { setEditingStudentId(null); setStudentForm({ name: '', phone: '', fatherPhone: '', motherPhone: '', groupId: '' }) }}>Bekor qilish</ActionButton>}
+                </div>
               </form>
             </Panel>
             {credentials && (
@@ -981,6 +1119,7 @@ export default function MainApp() {
                     <div className="min-w-0"><p className="truncate text-sm font-semibold">{item.name}</p><p className="text-xs text-[var(--mini-muted)]">{item.phone || 'Telefon yo‘q'}</p></div>
                     <div className="flex shrink-0 flex-col items-end gap-1">
                       <span className="rounded-full bg-[var(--mini-bg)] px-3 py-1 text-xs">{item.login || 'Login yo‘q'}</span>
+                      <ActionButton className="mini-secondary min-h-9 px-3 text-xs" disabled={busy} onClick={() => editStudent(item)}>Tahrirlash</ActionButton>
                       {item.telegram_id
                         ? <span className="text-[11px] text-[var(--mini-muted)]">Telegram ulangan</span>
                         : <ActionButton className="mini-secondary min-h-9 px-3 text-xs" disabled={busy} onClick={() => createInvite(item.profile_id)}>Ulash</ActionButton>}
@@ -996,28 +1135,35 @@ export default function MainApp() {
               </div>
             </Panel>
             <Panel>
-              <h2 className="font-bold">O‘qituvchi qo‘shish</h2>
-              <p className="mt-1 text-xs text-[var(--mini-muted)]">Akkaunt yaratiladi va Telegram ulash havolasi tayyorlanadi.</p>
-              <form className="mt-4 grid gap-3" onSubmit={saveTeacher}>
+              <h2 className="font-bold">{editingTeacherId ? 'O‘qituvchi ma’lumotlarini tahrirlash' : 'O‘qituvchi qo‘shish'}</h2>
+              {!editingTeacherId && <p className="mt-1 text-xs text-[var(--mini-muted)]">Akkaunt yaratiladi va Telegram ulash havolasi tayyorlanadi.</p>}
+              <form id="mini-teacher-form" className="mt-4 grid gap-3" onSubmit={saveTeacher}>
                 <label className="mini-field"><span>Ism va familiya</span><input value={teacherForm.name} onChange={(event) => setTeacherForm({ ...teacherForm, name: event.target.value })} required /></label>
                 <label className="mini-field"><span>Telefon</span><input type="tel" value={teacherForm.phone} onChange={(event) => setTeacherForm({ ...teacherForm, phone: event.target.value })} /></label>
                 <label className="mini-field"><span>Oylik maosh (so‘m)</span><input type="number" min="0" value={teacherForm.monthlySalary} onChange={(event) => setTeacherForm({ ...teacherForm, monthlySalary: event.target.value })} /></label>
-                <ActionButton type="submit" disabled={busy}>{busy ? 'Saqlanmoqda…' : 'O‘qituvchini qo‘shish'}</ActionButton>
+                <div className="flex flex-wrap gap-2">
+                  <ActionButton type="submit" disabled={busy}>{busy ? 'Saqlanmoqda…' : editingTeacherId ? 'Saqlash' : 'O‘qituvchini qo‘shish'}</ActionButton>
+                  {editingTeacherId && <ActionButton className="mini-secondary" disabled={busy} onClick={() => { setEditingTeacherId(null); setTeacherForm({ name: '', phone: '', monthlySalary: '' }) }}>Bekor qilish</ActionButton>}
+                </div>
               </form>
               <div className="mt-3 divide-y divide-[var(--mini-border)]">
                 {teachers.map((item) => (
-                  <div key={item.id} className="flex items-center justify-between gap-2 py-3">
+                  <div key={item.id} className="flex flex-wrap items-center justify-between gap-2 py-3">
                     <div className="min-w-0"><p className="truncate text-sm font-semibold">{item.name}</p><p className="text-xs text-[var(--mini-muted)]">{item.phone || 'Telefon yo‘q'}</p></div>
-                    {item.telegram_id
-                      ? <span className="text-xs text-[var(--mini-muted)]">Telegram ulangan</span>
-                      : item.profile_id && <ActionButton className="mini-secondary min-h-9 px-3 text-xs" disabled={busy} onClick={() => createInvite(item.profile_id)}>Ulash</ActionButton>}
+                    <div className="flex flex-wrap items-center gap-1">
+                      {item.telegram_id
+                        ? <span className="text-xs text-[var(--mini-muted)]">Telegram ulangan</span>
+                        : item.profile_id && <ActionButton className="mini-secondary min-h-9 px-3 text-xs" disabled={busy} onClick={() => createInvite(item.profile_id)}>Ulash</ActionButton>}
+                      <ActionButton className="mini-secondary min-h-9 px-3 text-xs" disabled={busy} onClick={() => editTeacher(item)}>Tahrirlash</ActionButton>
+                      <ActionButton className="mini-secondary min-h-9 px-3 text-xs" disabled={busy} onClick={() => removeTeacher(item)}>O‘chirish</ActionButton>
+                    </div>
                   </div>
                 ))}
               </div>
             </Panel>
             <Panel>
-              <h2 className="font-bold">Guruh yaratish</h2>
-              <form className="mt-4 grid gap-3" onSubmit={saveGroup}>
+              <h2 className="font-bold">{editingGroupId ? 'Guruhni tahrirlash' : 'Guruh yaratish'}</h2>
+              <form id="mini-group-form" className="mt-4 grid gap-3" onSubmit={saveGroup}>
                 <label className="mini-field"><span>Guruh nomi</span><input value={groupForm.name} onChange={(event) => setGroupForm({ ...groupForm, name: event.target.value })} required /></label>
                 <label className="mini-field"><span>O‘qituvchi</span>
                   <select value={groupForm.teacherId} onChange={(event) => setGroupForm({ ...groupForm, teacherId: event.target.value })}>
@@ -1027,17 +1173,32 @@ export default function MainApp() {
                 </label>
                 <label className="mini-field"><span>Oylik to‘lov (so‘m)</span><input type="number" min="0" value={groupForm.monthlyFee} onChange={(event) => setGroupForm({ ...groupForm, monthlyFee: event.target.value })} /></label>
                 <p className="text-xs font-semibold text-[var(--mini-muted)]">Dars vaqti — ixtiyoriy</p>
-                <div className="grid grid-cols-3 gap-2">
-                  <label className="mini-field"><span>Hafta kuni</span><select value={groupForm.day} onChange={(event) => setGroupForm({ ...groupForm, day: event.target.value })}>
-                    {['Dush.', 'Sesh.', 'Chor.', 'Pay.', 'Juma', 'Shan.', 'Yak.'].map((day, index) => <option key={day} value={index}>{day}</option>)}
-                  </select></label>
-                  <label className="mini-field"><span>Boshlanish</span><input type="time" value={groupForm.startTime} onChange={(event) => setGroupForm({ ...groupForm, startTime: event.target.value })} /></label>
-                  <label className="mini-field"><span>Tugash</span><input type="time" value={groupForm.endTime} onChange={(event) => setGroupForm({ ...groupForm, endTime: event.target.value })} /></label>
+                {groupForm.schedule.map((slot, index) => (
+                  <div key={index} className="grid grid-cols-1 items-end gap-2 sm:grid-cols-[1fr_1fr_1fr_auto]">
+                    <label className="mini-field"><span>Hafta kuni</span><select value={slot.day} onChange={(event) => setGroupForm((current) => ({ ...current, schedule: current.schedule.map((item, slotIndex) => slotIndex === index ? { ...item, day: event.target.value } : item) }))}>
+                      {['Dush.', 'Sesh.', 'Chor.', 'Pay.', 'Juma', 'Shan.', 'Yak.'].map((day, dayIndex) => <option key={day} value={dayIndex}>{day}</option>)}
+                    </select></label>
+                    <label className="mini-field"><span>Boshlanish</span><input type="time" value={slot.startTime} onChange={(event) => setGroupForm((current) => ({ ...current, schedule: current.schedule.map((item, slotIndex) => slotIndex === index ? { ...item, startTime: event.target.value } : item) }))} /></label>
+                    <label className="mini-field"><span>Tugash</span><input type="time" value={slot.endTime} onChange={(event) => setGroupForm((current) => ({ ...current, schedule: current.schedule.map((item, slotIndex) => slotIndex === index ? { ...item, endTime: event.target.value } : item) }))} /></label>
+                    {groupForm.schedule.length > 1 && <ActionButton className="mini-secondary mb-1 min-h-11 px-2" aria-label="Dars vaqtini olib tashlash" onClick={() => setGroupForm((current) => ({ ...current, schedule: current.schedule.filter((_, slotIndex) => slotIndex !== index) }))}>−</ActionButton>}
+                  </div>
+                ))}
+                <div className="flex flex-wrap gap-2">
+                  <ActionButton className="mini-secondary" onClick={() => setGroupForm((current) => ({ ...current, schedule: [...current.schedule, { day: '0', startTime: '', endTime: '' }] }))}>Vaqt qo‘shish</ActionButton>
+                  <ActionButton type="submit" disabled={busy}>{busy ? 'Saqlanmoqda…' : editingGroupId ? 'Guruhni saqlash' : 'Guruhni yaratish'}</ActionButton>
+                  {editingGroupId && <ActionButton className="mini-secondary" disabled={busy} onClick={() => { setEditingGroupId(null); setGroupForm({ name: '', teacherId: '', monthlyFee: '', schedule: [{ day: '0', startTime: '', endTime: '' }] }) }}>Bekor qilish</ActionButton>}
                 </div>
-                <ActionButton type="submit" disabled={busy}>{busy ? 'Saqlanmoqda…' : 'Guruhni yaratish'}</ActionButton>
               </form>
               <div className="mt-3 divide-y divide-[var(--mini-border)]">
-                {groups.map((item) => <p key={item.id} className="py-2 text-sm">{item.name}</p>)}
+                {groups.map((item) => (
+                  <div key={item.id} className="flex flex-wrap items-center justify-between gap-2 py-3">
+                    <span className="text-sm">{item.name}</span>
+                    <div className="flex gap-1">
+                      <ActionButton className="mini-secondary min-h-9 px-3 text-xs" disabled={busy} onClick={() => editGroup(item)}>Tahrirlash</ActionButton>
+                      <ActionButton className="mini-secondary min-h-9 px-3 text-xs" disabled={busy} onClick={() => removeGroup(item)}>O‘chirish</ActionButton>
+                    </div>
+                  </div>
+                ))}
               </div>
             </Panel>
             <Panel>

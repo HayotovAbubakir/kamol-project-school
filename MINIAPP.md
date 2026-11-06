@@ -25,25 +25,24 @@ Ma’lumot oqimi: React UI → `src/lib/data/` fasadi → Cloudflare API adapter
 | O‘ziga/mas’ul guruhiga tegishli homework | Bor | Bor | Bor | Bor |
 | Homework topshirish, rasm/PDF | Bor | — | — | — |
 | Topshiriqni tekshirish, izoh yozish | — | Bor | Faqat ko‘rish | Faqat ko‘rish |
-| O‘quvchi qo‘shish, login ko‘rish | — | — | Bor | Bor |
+| O‘quvchi qo‘shish/tahrirlash, login ko‘rish | — | — | Bor | Bor |
 | Telegram invite yaratish | — | — | Bor (student/teacher) | Bor |
 | Homework bo‘yicha oylik hisobot | — | — | Bor | Bor |
+| O‘z guruhlari va o‘quvchilar ro‘yxati | — | Bor | — | — |
 | Moliyaviy umumiy ko‘rsatkich | — | — | — | Bor (oylik) |
 | O‘z to‘lovi/davomatini ko‘rish | Bor | — | — | — |
-| O‘qituvchi qo‘shish va invite | — | — | Bor¹ | Bor¹ |
-| O‘qituvchini tahrirlash | — | — | UI yo‘q | UI yo‘q |
-| Guruh yaratish va jadval ziddiyatini tekshirish | — | — | Bor² | Bor² |
-| Guruhni tahrirlash/o‘chirish | — | — | UI yo‘q | UI yo‘q |
+| O‘qituvchi qo‘shish/tahrirlash va invite | — | — | Bor | Bor |
+| Guruh yaratish/tahrirlash/o‘chirish, jadval ziddiyatini tekshirish | — | — | Bor | Bor |
 | To‘lov kiritish, oxirgi to‘lovlarni ko‘rish | — | — | Bor | Bor |
 | Qarzdorlar ro‘yxati | — | — | UI yo‘q | UI yo‘q |
 | Davomat belgilash va ko‘rish | O‘zini ko‘rish | Bor | Bor | Bor |
 | Xarajat kiritish/ko‘rish | — | — | — | Bor |
-| Ish haqi va staff/admin boshqaruvi | — | — | — | UI yo‘q |
+| Ish haqi kiritish/ko‘rish | — | — | — | Bor |
+| Staff/admin boshqaruvi | — | — | — | UI yo‘q |
 
-¹ O‘qituvchi akkaunti va bir martalik Telegram invite yaratiladi; tahrirlash/faolsizlantirish amali yo‘q.<br>
-² Shared ERP validation va Worker jadval ziddiyatini tekshirish group yaratishda ishlatiladi; tahrirlash/o‘chirish UI yo‘q.
+O‘quvchini faolsizlantirish amali, qarzdorlar ro‘yxati va 500 dan ortiq o‘quvchi uchun server pagination hali yo‘q. Guruhni o‘chirish tasdiq oynasi bilan bajariladi; o‘qituvchini o‘chirish ham tasdiq talab qiladi.
 
-Yuqorida UI yetishmayotgan joylar ERP bilan to‘liq teng deb hisoblanmaydi. Grafik talab qiladigan hisobot oylik yig‘indi ko‘rinishida soddalashtirilgan. Reception/Owner’ning ayrim kundalik boshqaruv amallari Mini App’ga hali kiritilmagan.
+Staff/admin akkauntlarini boshqarish Mini App’da hali yo‘q. Grafik talab qiladigan hisobot oylik yig‘indi ko‘rinishida soddalashtirilgan; shu sabab Mini App hali ERP bilan to‘liq teng emas.
 
 ## UI/UX va ma’lumot oqimi
 
@@ -59,8 +58,9 @@ Yuqorida UI yetishmayotgan joylar ERP bilan to‘liq teng deb hisoblanmaydi. Gra
 - Avtomatik testlar: Telegram HMAC (to‘g‘ri/o‘zgartirilgan/muddati o‘tgan/kelajakdagi ma’lumot), invite xeshi va bir martalik ishlatish, role ruxsatlari, Worker auth va biznes logikasi.
 - `npm.cmd run lint` — muvaffaqiyatli.
 - `npm.cmd test` — 2 test fayli, 13 test muvaffaqiyatli.
-- `npm.cmd run build` — muvaffaqiyatli; `miniapp.html` build tarkibida bor, Mini App JavaScript gzip hajmi 11.62 KB.
+- `npm.cmd run build` — muvaffaqiyatli; `miniapp.html` build tarkibida bor, Mini App JavaScript gzip hajmi 12.57 KB.
 - Brauzerda Telegram auth mock bilan 360×640 o‘lchamda boshqaruv panelini, 430×932 o‘lchamda dashboard’ni ko‘rdim; ikkala holatda ham gorizontal overflow yo‘q. 360×640, 390×844, 430×932 o‘lchamlarida kirish sahifasida ham overflow kuzatilmadi. Bu real Telegram auth yoki Playwright e2e sinovi emas.
+- 360×640 mock boshqaruv ekranida o‘quvchi, o‘qituvchi va bir nechta haftalik dars vaqti bor guruh tahrirlash formalarini ochib ko‘rdim; gorizontal overflow kuzatilmadi.
 - Secrets bo‘lmagani uchun live URL, webhook va GitHub Actions deploy’ni tekshirib bo‘lmaydi. Haqiqiy Telegram klientidagi oqimni qo‘lda sinash kerak.
 - Deploy’dan oldin GitHub secrets’ni `MIGRATION.md` ko‘rsatmasiga ko‘ra sozlab, D1 `0003_telegram_miniapp.sql` migratsiyasi va Worker deploy workflow’ni ishga tushiring.
 - O‘quvchi yoki staff akkaunti yaratilgach, Reception/Owner invite yaratib 15 daqiqa ichida yuboradi. Yangi tizim to‘liq tekshirilmaguncha Supabase’ni o‘chirmang.

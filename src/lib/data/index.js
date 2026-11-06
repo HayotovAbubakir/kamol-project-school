@@ -52,14 +52,19 @@ export const students = {
 }
 export const teachers = {
   async list() {
-    const { data, error } = await cloudflare.from('teachers').select('id, name, phone, created_at').order('name')
+    const { data, error } = await cloudflare.from('teachers').select('id, name, phone, monthly_salary, created_at').order('name')
     if (error) throw error
     const rows = data || []
     if (!rows.length) return []
     const profiles = await cloudflare.from('profiles').select('id, teacher_id, telegram_id').in('teacher_id', rows.map((row) => row.id))
     if (profiles.error) throw profiles.error
     const byTeacher = new Map((profiles.data || []).map((profile) => [profile.teacher_id, profile]))
-    return rows.map((row) => ({ ...row, profile_id: byTeacher.get(row.id)?.id || null, telegram_id: byTeacher.get(row.id)?.telegram_id || null }))
+    return rows.map((row) => ({
+      ...row,
+      monthlySalary: Number(row.monthly_salary) || 0,
+      profile_id: byTeacher.get(row.id)?.id || null,
+      telegram_id: byTeacher.get(row.id)?.telegram_id || null,
+    }))
   },
   create: addTeacher,
   update: updateTeacher,

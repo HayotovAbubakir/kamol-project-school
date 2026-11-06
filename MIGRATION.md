@@ -78,7 +78,7 @@ Repository → **Settings → Secrets and variables → Actions** ichida quyidag
 ### Joriy bajarilish holati
 
 - Uchta funksional commit va holat hujjati `master` branch'iga push qilindi: `2e3e549`, `a48f426`, `7de5352`, `06cad01`.
-- Joriy ishchi nusxada `npm.cmd run lint`, `npm.cmd test` (**13 test passed**) va `npm.cmd run build` muvaffaqiyatli; Mini App bundle gzip hajmi 11.62 KB.
+- Joriy ishchi nusxada `npm.cmd run lint`, `npm.cmd test` (**13 test passed**) va `npm.cmd run build` muvaffaqiyatli; Mini App bundle gzip hajmi 12.57 KB.
 - `migrations/` ichidagi uchta SQL migratsiya SQLite’da xatosiz qo‘llandi.
 - [GitHub Actions run 42267901754](https://github.com/HayotovAbubakir/kamol-project-school/actions/runs/42267901754): `verify` job muvaffaqiyatli tugadi. `deploy` job `Validate deploy secrets` bosqichida to‘xtadi, chunki repository’da quyidagilar yo‘q: `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_API_URL`, `AUTH_SECRET`, `BOT_API_SECRET`, `MIGRATION_SECRET`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_WEBHOOK_SECRET`.
 - Shu sabab D1/R2 resurslari, Worker deployment, webhook, data import va live health check bajarilmadi. Live URL mavjud emas yoki bu ishda tekshirilmagan; deploy muvaffaqiyati da’vo qilinmaydi.
