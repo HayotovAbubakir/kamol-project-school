@@ -1,154 +1,72 @@
-# KAMOL PROJECT SCHOOL — O'quv Markazini Boshqarish ERP Tizimi
+# Kamol School
 
-**KAMOL PROJECT SCHOOL** — o'quvchilar, o'qituvchilar, guruhlar, oylik to'lovlar va davomatni markazlashtirilgan holda boshqarish uchun mo'ljallangan ichki CRM/ERP platformasi.
+Kamol School — o‘quv markazi uchun ERP, Telegram Mini App va bot. Ishlayotgan tizim Cloudflare Workers, D1 va R2’dan foydalanadi:
 
----
+- **Workers** — ERP/Mini App statik fayllari va API.
+- **D1** — akkauntlar, o‘quvchilar, guruhlar, to‘lovlar, davomat va uy vazifalari.
+- **R2** — uy vazifalariga biriktirilgan fayllar.
+- **Telegram bot** — Worker webhook’i va D1/R2 API’lari orqali ishlaydi.
 
-## Hozirgi holat
+Ilova runtime’ida Supabase ishlatilmaydi. Eski Supabase loyihasi ma’lumotlarni bir martalik ko‘chirish manbai sifatida, faqat egasi tasdiqlaguncha o‘zgarishsiz saqlanadi.
 
-| Modul | Holat |
-|-------|--------|
-| Owner / Admin / Teacher rollari | Tayyor |
-| Login (Supabase Auth) | Tayyor |
-| O'quvchilar, o'qituvchilar, guruhlar | Tayyor |
-| Guruh vaqt/o'qituvchi to'qnashuvi | Tayyor |
-| To'lovlar, maosh, xarajatlar | Tayyor |
-| Moliya va davomat chartlari | Tayyor |
-| **Supabase (Auth + Postgres)** | Tayyor |
-| Telegram Mini App (login, vazifalar, topshiriqlar) | Tayyorlanmoqda |
-| Cloudflare R2 uy vazifasi fayllari | Sozlash talab qilinadi |
-| Face ID biometrik | Keyingi bosqich |
+## Mahalliy ishga tushirish
 
----
+Node.js 22 va npm kerak.
 
-## Supabase ulash (birinchi marta)
-
-### 1. Project oching
-
-1. [supabase.com](https://supabase.com) da yangi project yarating
-2. **Authentication → Providers → Email**: *Confirm email* ni o‘chiring (dev uchun)
-3. **Project Settings → API** dan `Project URL` va `anon public` key ni nusxalang
-
-### 2. Schema
-
-SQL Editor da [`supabase/schema.sql`](supabase/schema.sql) ni to‘liq ishga tushiring (full cleanup + schema — yagona SQL fayl).
-
-### 3. Test userlar
-
-**Authentication → Users → Add user:**
-
-| Email | Password |
-|-------|----------|
-| `owner@kamol.school` | `owner123` |
-| `admin@kamol.school` | `admin123` |
-
-Keyin `schema.sql` oxiridagi SEED qismini (yoki butun faylni) yana ishga tushiring — rollar `owner` / `admin` bo‘ladi.
-
-### 4. Env
-
-```bash
-cp .env.example .env
-```
-
-`.env` ichiga:
-
-```env
-VITE_SUPABASE_URL=https://XXXX.supabase.co
-VITE_SUPABASE_ANON_KEY=eyJ...
-```
-
-### 5. Ishga tushirish
-
-```bash
-npm install
+```sh
+npm ci
 npm run dev
 ```
 
-Login: `owner` / `owner123` (username — ichida `owner@kamol.school` ga map qilinadi).
+`.env.example` asosida `.env` yarating. Frontend uchun `CLOUDFLARE_API_URL` Worker API manzili bo‘lishi kerak. To‘liq Worker’ni lokal sinash uchun:
 
----
-
-## O'rnatish
-
-```bash
-npm install
-npm run dev
-```
-
-Brauzer: [http://localhost:5173](http://localhost:5173)
-
-```bash
+```sh
 npm run build
-npm run preview
+npm start
+```
+
+Asosiy tekshiruvlar:
+
+```sh
 npm run lint
+npm test
+npm run build
 ```
 
----
+`npm start` Wrangler Local Development muhitida Worker’ni ishga tushiradi. Telegram bot alohida polling jarayoni sifatida ishlamaydi; deploy qilingan Worker webhook so‘rovlarini qabul qiladi.
 
-## Rollar
+## Cloudflare va GitHub Actions
 
-| Rol | Huquq |
-|-----|-------|
-| **Owner** | To‘liq: adminlar, moliya, xarajatlar |
-| **Admin** | Operatsion: o‘quvchi/o‘qituvchi/guruh, to‘lovlar |
-| **O'qituvchi** | O‘z guruhlari, davomat |
+`.github/workflows/deploy-worker.yml` har bir push va pull request uchun lint, test hamda build'ni ishga tushiradi. `main` yoki `master` branch'iga push qilinganda deploy ham bajariladi.
 
----
+GitHub repository’dagi **Settings → Secrets and variables → Actions** bo‘limida quyidagi secrets’ni yarating:
 
-## Loyiha tuzilmasi
+| Secret | Vazifasi |
+|---|---|
+| `CLOUDFLARE_API_TOKEN` | Worker deploy hamda D1/R2 sozlamalari |
+| `CLOUDFLARE_ACCOUNT_ID` | Cloudflare account ID |
+| `CLOUDFLARE_API_URL` | Deploy qilingan Worker’ning HTTPS manzili |
+| `AUTH_SECRET` | Sessiya tokeniga imzo qo‘yish |
+| `BOT_API_SECRET` | Bot va Worker o‘rtasidagi API |
+| `MIGRATION_SECRET` | Bir martalik ma’lumot importi |
+| `TELEGRAM_BOT_TOKEN` | Telegram bot tokeni |
+| `TELEGRAM_WEBHOOK_SECRET` | Telegram webhook siri |
 
+Workflow D1 `kamol-school-db` va R2 `kamol-files` resurslarini yaratadi yoki tekshiradi, D1 migratsiyalarini qo‘llaydi va Worker’ni deploy qiladi. Deploy muvaffaqiyatli deb faqat GitHub Actions yashil bo‘lsa va `/api/health` HTTP 200 qaytarsa aytish mumkin. Batafsil tartib [MIGRATION.md](./MIGRATION.md) faylida.
+
+## Birinchi Owner va eski ma’lumotlar
+
+- Yangi, bo‘sh tizimda Owner yaratish uchun `OWNER_SEED_SECRET` va `OWNER_SEED_PASSWORD` qiymatlarini Worker secrets sifatida o‘rnating va lokal muhitda `npm run owner:seed` buyrug‘ini bajaring. Parolni source control yoki chatda saqlamang.
+- Eski Supabase ma’lumotlari bo‘lsa, avval backup oling. Cloudflare D1 migratsiyasi tugagandan keyingina `node scripts/migrate-supabase-to-cloudflare.mjs` ni bajaring.
+- Manba va D1 jadvallaridagi qatorlar sonini solishtirib, fayllar hamda Owner loginini tekshiring. Ko‘chirilgan boshqa foydalanuvchilar birinchi kirishda parolni yangilashi kerak; Owner/Admin/Reception o‘quvchi, o‘qituvchi yoki admin uchun vaqtinchalik parol chiqarishi mumkin.
+- Yangi tizim tasdiqlanmaguncha Supabase’ni o‘chirmang. Xavfsiz tartib [MIGRATION.md](./MIGRATION.md) da.
+
+## Bot buyruqlari
+
+Deploy vaqtida GitHub Actions bot webhook va Web App menyusini sozlaydi. Qo‘lda qayta sozlash kerak bo‘lsa, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_WEBHOOK_SECRET` va `CLOUDFLARE_API_URL` environment qiymatlarini kiriting:
+
+```sh
+npm run bot:webhook:set
 ```
-src/
-├── components/
-├── context/          # AuthContext (Supabase Auth), DataContext (API)
-├── lib/
-│   ├── api.js        # Supabase CRUD
-│   ├── supabase.js   # Client
-│   ├── store.js      # Pure helpers (finance, schedule validation)
-│   └── ...
-├── pages/
-supabase/
-└── schema.sql        # Full cleanup + tables + RLS + seed
-```
 
----
-
-## Telegram bot (Railway)
-
-Noutbuk o‘chiq bo‘lsa ham bot ishlashi uchun Railway da deploy qilinadi.
-
-1. GitHubga push qiling
-2. [railway.app](https://railway.app) → New Project → Deploy from GitHub
-3. Variables qo‘ying:
-   - `TELEGRAM_BOT_TOKEN`
-   - `SUPABASE_SERVICE_ROLE_KEY`
-   - `VITE_SUPABASE_URL` (yoki `SUPABASE_URL`)
-   - `TELEGRAM_WEBAPP_URL` — Cloudflare Worker bergan public HTTPS URL va `/miniapp.html` yo‘li.
-4. Vite `miniapp.html` ni ERP saytidan alohida, yengil Telegram Mini App sifatida build qiladi (`/miniapp.html`). GitHub Actions `.github/workflows/deploy-worker.yml` orqali Cloudflare Worker'ga deploy qiladi. GitHub repository secrets sifatida `CLOUDFLARE_API_TOKEN` (Workers Scripts Edit ruxsati) va `CLOUDFLARE_ACCOUNT_ID` qo‘ying; Variables ichida `VITE_SUPABASE_URL` va `VITE_SUPABASE_ANON_KEY` bo‘lishi kerak.
-5. Start command: `node bot/index.mjs` (`railway.json` da bor). Bot menyusida va asosiy klaviaturada “Ilovani ochish” tugmasi paydo bo‘ladi.
-
-### Mini App va Cloudflare R2 sozlamalari
-
-- `supabase/schema.sql` ni Supabase SQL Editor’da ishga tushiring; u Mini App jadvallari, view va RLS siyosatlarini o‘rnatadi.
-- Supabase Auth’da email confirmation’ni o‘chiring, chunki yangi o‘quvchi login/paroli bilan darhol kirishi kerak.
-- `supabase/functions/r2-presign` Edge Function’ni deploy qiling va `CF_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET_NAME`, `R2_PUBLIC_URL` qiymatlarini Supabase Function secrets’da sozlang.
-- Bot serveri uchun ham shu R2 qiymatlarini environment variables sifatida bering. `R2_PUBLIC_URL` HTTPS orqali o‘qiladigan R2 custom domain yoki public bucket URL bo‘lishi kerak.
-- `kamol-files` bucket CORS sozlamasida deployed Mini App origin’iga `PUT` va `OPTIONS` metodlarini, `Content-Type` header’ini ruxsat qiling.
-- O‘quvchi paroli faqat yangi akkaunt yaratilganda bir marta ko‘rsatiladi; xavfsizlik uchun qayta ko‘rish imkoniyati yo‘q.
-
-Lokal PM2 ni o‘chirish: `npm run bot:uninstall-local`
-
----
-
-## Texnologiyalar
-
-| Qatlam | Texnologiya |
-|--------|-------------|
-| Frontend | React 19, Vite 8, React Router |
-| Auth / DB | Supabase Auth + PostgreSQL |
-| Chartlar | Recharts |
-| Ikonlar | Lucide React |
-
----
-
-© 2026 **KAMOL PROJECT SCHOOL**. Barcha huquqlar himoyalangan.
+Fayl Telegram’dan Worker API’ga uzatiladi va R2’da saqlanadi. Bot polling jarayonini webhook bilan bir vaqtda ishga tushirmang.

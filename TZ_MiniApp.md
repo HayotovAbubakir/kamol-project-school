@@ -1,44 +1,55 @@
-# KAMOL PROJECT SCHOOL — Telegram Mini App va ERP Integratsiyasi Texnik Topshiriq (TZ)
+# KAMOL PROJECT SCHOOL — Telegram Mini App va ERP texnik talablari
 
-## 1. Loyihaning maqsadi
-Mavjud ERP tizimi va Telegram botni yagona ekotizimga birlashtirish. Mini App o'quvchilar, o'qituvchilar, Reception va Owner uchun mobil qurilmalarda ishlaydigan yengil ofis bo'ladi. Asosiy kirish usuli login va parol bo'ladi.
+## 1. Maqsad
+
+ERP, Telegram bot va Mini App yagona tizim bo‘lib ishlaydi. Mini App o‘quvchi, o‘qituvchi, reception va owner uchun mobil qurilmaga mos yengil ofis vazifasini bajaradi. Asosiy kirish usuli — login va parol.
 
 ## 2. Rollar
-1. **O'quvchi:** o'z vazifalarini ko'radi va matn, rasm yoki PDF bilan topshiradi; baholari va oylik statistikasini ko'radi.
-2. **O'qituvchi:** o'z guruhlariga vazifa beradi, topshiriqlarni qabul qiladi yoki qaytaradi va izoh yozadi.
-3. **Reception:** o'quvchi yaratadi, login/parolni yetkazadi, guruhlarga biriktiradi va vazifalarni boshqaradi.
-4. **Owner:** barcha huquqlarga, o'quv va moliyaviy hisobotlarga ega.
 
-## 3. Avtorizatsiya
-- Mini App va ERP yagona Supabase Auth login/parol tizimidan foydalanadi.
-- O'quvchi yaratilganda ism-familiyadan takrorlanmaydigan login (`login`, zarur bo'lsa sonli qo'shimcha) va `kp` + 5 raqam + `s` shaklidagi parol yaratiladi.
-- Login va parol Reception/Owner'ga faqat akkaunt yaratilgan paytda ko'rsatiladi; parol ochiq holda bazada saqlanmaydi.
-- Telegram `initData` ixtiyoriy qulaylik bo'lib qoladi; asosiy kirish login va parol bilan.
-- RLS har bir foydalanuvchining roli va guruhiga mos ma'lumotlargagina ruxsat beradi.
+- **O‘quvchi:** o‘z vazifalarini ko‘radi, matn yoki fayl topshiradi, baho va statistikani ko‘radi.
+- **O‘qituvchi:** o‘z guruhlariga vazifa beradi, topshiriqlarni tekshiradi, qabul qiladi yoki qaytarib izoh yozadi.
+- **Reception/Admin:** o‘quvchilar va guruhlarni boshqaradi, login ma’lumotlarini beradi, vazifalarni taqsimlaydi.
+- **Owner:** barcha o‘quv va moliyaviy ma’lumotlarni hamda hisobotlarni ko‘rish huquqiga ega.
+
+## 3. Kirish va hisoblar
+
+- ERP va Mini App bitta Cloudflare Worker autentifikatsiya xizmatidan foydalanadi.
+- Login ism-familiyadan takrorlanmaydigan shaklda yaratiladi; vaqtinchalik parol `kp` + 5 raqam + `s` shaklida bo‘ladi.
+- Parol D1’da ochiq saqlanmaydi: Worker PBKDF2 xeshini saqlaydi.
+- Vaqtinchalik parol faqat yaratilgan yoki qayta o‘rnatilgan paytda ko‘rsatiladi. Import qilingan akkauntlar birinchi kirishda parolni yangilashi shart.
+- Telegram `initData` asosiy autentifikatsiya emas. Bot menyusi Mini App’ni ochish uchun ishlatiladi.
+- API har bir so‘rovda foydalanuvchini aniqlab, rol va tegishli yozuvlar bo‘yicha ruxsatni serverda tekshiradi. Frontend route guard xavfsizlik chegarasi hisoblanmaydi.
 
 ## 4. Mini App sahifalari
-1. Login: logo, login va parol.
-2. Dashboard: rolga mos salomlashish va vazifalar, baholar yoki boshqaruv kartalari.
-3. Uy vazifalari: o'quvchiga biriktirilgan yoki o'qituvchi yaratgan vazifalar va statuslar.
-4. Vazifa tafsiloti: shart/fayl, o'quvchi javobi, o'qituvchining qabul qilish/qaytarish va izoh berish amallari.
-5. Boshqaruv (Reception/Owner): o'quvchi yaratish, login ma'lumotlarini ko'rsatish va guruhga biriktirish.
-6. Hisobotlar (Reception/Owner): har o'quvchining oylik topshiriq va baholash statistikasi.
 
-## 5. Uy vazifalari jarayoni
-1. O'qituvchi guruh, sarlavha, izoh, muddat va fayl bilan vazifa yaratadi.
-2. O'quvchi Mini App'da matn yoki fayl yuboradi. Fayl imzolangan URL orqali Cloudflare R2'ga yuklanadi; topshiriq `pending` statusi bilan saqlanadi. Bot ham Telegram'dan qabul qilgan fayllarni R2'ga yuklay oladi.
-3. O'qituvchi topshiriqni `approved` yoki `rejected` qiladi va izoh saqlaydi.
-4. `monthly_homework_report` view oylik statistikani taqdim etadi.
+1. **Kirish:** tizim nomi, login va parol.
+2. **Dashboard:** rolga mos salomlashish, vazifalar, baholar yoki boshqaruv kartalari.
+3. **Vazifalar:** o‘quvchining vazifalari va ularning holati yoki o‘qituvchi yaratgan vazifalar.
+4. **Vazifa tafsiloti:** shart va fayl; o‘quvchi javobi; o‘qituvchining tasdiqlash/qaytarish amali va izohi.
+5. **Boshqaruv:** reception/owner uchun o‘quvchi yaratish, login ma’lumotlari va guruhga biriktirish.
+6. **Hisobotlar:** vakolatli rollar uchun oylik topshiriq va baholash statistikasi.
 
-## 6. Ma'lumotlar va xotira
-- Supabase Auth va PostgreSQL foydalanuvchi hamda o'quv jarayoni ma'lumotlarini saqlaydi.
-- `students` jadvalida login va Auth profiliga bog'lanish bo'ladi; `homework`, `homework_submissions`, `staff_codes` va `monthly_homework_report` ishlatiladi.
-- Supabase Storage ishlatilmaydi. Uy vazifasi fayllari Cloudflare R2'da saqlanadi.
-- R2 uchun `CF_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_PUBLIC_URL`, `R2_BUCKET_NAME` sozlanadi.
+## 5. Uy vazifasi va fayllar
 
-## 7. Texnik talablar
-1. Mini App alohida `src/miniapp/` entry point bo'ladi; mavjud ERP `App.jsx`-ga tegilmaydi.
-2. Bot grammY orqali shaxsiy chatda Web App tugmasini ko'rsatadi va rasm/PDF fayllarni R2'ga yuklaydi.
-3. Mini App React va Tailwind CSS bilan, mobile-first va og'ir qo'shimcha UI kutubxonalarisiz quriladi.
-4. Auth sessiyasi JWT asosida bo'ladi; R2 presign Edge Function sessiyani tekshiradi.
-5. Barcha jadvallarda role/group access RLS bilan cheklanadi.
+- Vazifada guruh, sarlavha, izoh, muddat va ixtiyoriy fayl bo‘ladi.
+- O‘quvchi matn yoki qo‘llab-quvvatlanadigan fayl yuboradi; javob `pending` holatida saqlanadi.
+- O‘qituvchi topshiriqni `approved` yoki `rejected` qiladi va izoh qoldirishi mumkin.
+- Ilova ma’lumotlari Cloudflare D1’da; fayllar maxfiy Cloudflare R2 bucket’da saqlanadi.
+- Fayl yuklash Worker orqali amalga oshadi, hajm va format cheklanadi. Faylga kirish muddati cheklangan URL orqali beriladi.
+- Telegram bot Worker webhook sifatida ishlaydi; polling jarayoni production’da yoqilmaydi.
+
+## 6. Arxitektura
+
+- Frontend: React va Tailwind CSS, mobile-first.
+- API va autentifikatsiya: Cloudflare Worker.
+- Ma’lumotlar: D1 migratsiyalari `migrations/` ichida.
+- Fayllar: R2 `kamol-files` binding.
+- Bot: Worker webhook; D1 va R2 bilan ishlash uchun Worker API’dan foydalanadi.
+- D1’da PostgreSQL RLS o‘rniga har bir route’da server-side rol va qator ruxsatlari qo‘llanadi.
+- Supabase faqat avvalgi ma’lumotlarni bir marta eksport qilish manbasi bo‘lishi mumkin; production runtime unga bog‘liq emas.
+
+## 7. Deploy va sifat talablari
+
+- GitHub Actions har bir push va pull request uchun ESLint, Vitest hamda production build'ni ishga tushiradi.
+- `main`/`master` branch'iga push qilinganda secrets mavjud bo‘lsa D1 migratsiyasi, Worker deploy, Telegram webhook sozlamasi va health check (`/api/health`, HTTP 200) bajariladi.
+- Cloudflare secrets va migratsiyani qo‘lda bajarish tartibi [MIGRATION.md](./MIGRATION.md) da.
