@@ -494,6 +494,7 @@ export async function addStudent(payload) {
     credentials: {
       username: credentials.username,
       password: credentials.password,
+      profileId: credentials.userId,
     },
   }
 }

@@ -216,6 +216,24 @@ class CloudflareClient {
   }
 
   auth = {
+    async signInWithTelegram() {
+      const initData = typeof window === 'undefined' ? '' : window.Telegram?.WebApp?.initData
+      if (!initData) return { data: { user: null, session: null }, error: new Error('Mini App’ni Telegram ichidan oching.') }
+      try {
+        const { response, result } = await request('/api/auth/telegram', { body: { initData } })
+        if (!response.ok) {
+          const error = new Error(result.error || 'Telegram orqali kirib bo‘lmadi.')
+          error.code = result.code
+          return { data: { user: null, session: null }, error }
+        }
+        writeSession(result.session)
+        emitAuth('SIGNED_IN', result.session)
+        return { data: result, error: null }
+      } catch (error) {
+        return { data: { user: null, session: null }, error }
+      }
+    },
+
     async getSession() {
       const session = readSession()
       if (!session?.access_token) return { data: { session: null }, error: null }

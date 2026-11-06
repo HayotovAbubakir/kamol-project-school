@@ -21,10 +21,21 @@ import {
   unlinked,
   welcomeAskCode,
 } from './messages.mjs'
+import { InlineKeyboard } from 'grammy'
 
 function currentMonthYear() {
   const now = new Date()
   return { month: now.getMonth() + 1, year: now.getFullYear() }
+}
+
+function roleLabel(role) {
+  return ({
+    student: 'o‘quvchi',
+    teacher: 'o‘qituvchi',
+    admin: 'qabulxona',
+    reception: 'qabulxona',
+    owner: 'ega',
+  })[role] || 'foydalanuvchi'
 }
 
 function looksLikeCode(text) {
@@ -67,41 +78,14 @@ async function requireStudent(db, chatId, ctx) {
   return student
 }
 
-async function getStudentHomework(db, studentId) {
-  const { data: memberships, error: membershipError } = await db
-    .from('group_students')
-    .select('group_id')
-    .eq('student_id', studentId)
-
-  if (membershipError) throw membershipError
-  const groupIds = (memberships || []).map((row) => row.group_id).filter(Boolean)
-  if (!groupIds.length) return []
-
-  const { data, error } = await db
-    .from('homework')
-    .select('*')
-    .in('group_id', groupIds)
-    .order('due_at', { ascending: true })
-
-  if (error) throw error
-  return data || []
-}
-
 async function saveHomeworkSubmission(db, studentId, homeworkId, payload) {
-  const { data, error } = await db
-    .from('homework_submissions')
-    .upsert({
-      homework_id: homeworkId,
-      student_id: studentId,
-      ...payload,
-      status: 'pending',
-      submitted_at: new Date().toISOString(),
-    }, { onConflict: 'homework_id,student_id' })
-    .select()
-    .single()
-
-  if (error) throw error
-  return data
+  await db.submitHomework({
+    homework_id: homeworkId,
+    student_id: studentId,
+    ...payload,
+    status: 'pending',
+    submitted_at: new Date().toISOString(),
+  })
 }
 
 async function handleUploadMessage(ctx, db, token) {
@@ -118,14 +102,22 @@ async function handleUploadMessage(ctx, db, token) {
     return
   }
 
-  const homeworkList = await getStudentHomework(db, existing.students.id)
-  if (homeworkList.length > 1) {
-    await ctx.reply('Sizda bir nechta vazifa bor. Kerakli vazifani tanlab, faylni Mini App orqali yuboring.')
-    return
-  }
-  const targetHomework = homeworkList[0] || null
+  let targetHomework = await db.getPendingHomework(chatId)
   if (!targetHomework) {
-    await ctx.reply('Hozircha sizga vazifa berilmagan. O‘qituvchi vazifa qo‘shguncha kuting.')
+    const homeworkList = await db.getStudentHomework(chatId)
+    if (homeworkList.length > 1) {
+      const keyboard = new InlineKeyboard()
+      for (const homework of homeworkList.slice(0, 20)) {
+        keyboard.text(homework.title.slice(0, 48), `homework:${homework.id}`).row()
+      }
+      await ctx.reply('Fayl qaysi vazifa uchun? Tanlang:', { reply_markup: keyboard })
+      return
+    }
+    targetHomework = homeworkList[0] || null
+    if (targetHomework) await db.selectHomework(chatId, targetHomework.id)
+  }
+  if (!targetHomework) {
+    await ctx.reply('Hozir topshirish uchun ochiq vazifa yo‘q.')
     return
   }
 
@@ -170,13 +162,14 @@ async function handleUploadMessage(ctx, db, token) {
     mimeType: contentType,
   })
 
-  await saveHomeworkSubmission(db, existing.students.id, targetHomework.id, {
+  await saveHomeworkSubmission(db, existing.students.id, targetHomework.homework_id || targetHomework.id, {
     file_url: r2Result.url,
     text_answer: '',
     status: 'pending',
+    chat_id: chatId,
   })
 
-  await ctx.reply(`Topshirish muvaffaqiyatli qabul qilindi.\nVazifa: ${targetHomework.title}\nFayl: ${r2Result.url}`)
+  await ctx.reply(`Topshirish muvaffaqiyatli qabul qilindi.\nVazifa: ${targetHomework.title}`)
 }
 
 async function replyHolat(ctx, db, student, webAppUrl) {
@@ -226,9 +219,26 @@ export function registerHandlers(bot, db, webAppUrl, token) {
     await safeReply(ctx, async () => {
       await setPrivateChatMenuButton(ctx)
       const chatId = ctx.chat.id
+      const payload = String(ctx.match || '').trim()
+      if (payload) {
+        const staff = payload.startsWith('login_')
+        const code = staff ? payload.slice(6) : payload
+        const profile = await db.consumeInvite(code, Number(ctx.from.id), staff)
+        await ctx.reply(`Telegram akkaunt ulandi, ${profile.name} (${roleLabel(profile.role)}).`, {
+          reply_markup: mainKeyboard(webAppUrl),
+        })
+        return
+      }
       const link = await getLinkByChat(db, chatId)
       if (link?.students) {
         await ctx.reply(alreadyLinked(link.students), { reply_markup: mainKeyboard(webAppUrl) })
+        return
+      }
+      const profile = await db.getProfileByTelegram(Number(ctx.from.id))
+      if (profile) {
+        await ctx.reply(`Xush kelibsiz, ${profile.name}! Mini App orqali davom eting.`, {
+          reply_markup: mainKeyboard(webAppUrl),
+        })
         return
       }
       await ctx.reply(welcomeAskCode(), removeKeyboard())
@@ -243,34 +253,24 @@ export function registerHandlers(bot, db, webAppUrl, token) {
 
     await safeReply(ctx, async () => {
       await setPrivateChatMenuButton(ctx)
-      const code = String(ctx.match || '').trim().toUpperCase()
+      const code = String(ctx.match || '').trim()
       if (!code) {
         await ctx.reply('Foydalanuvchi kodini kiriting: /login KOD')
         return
       }
+      const profile = await db.consumeInvite(code, Number(ctx.from.id), true)
+      await ctx.reply(`Login muvaffaqiyatli yakunlandi. Rol: ${roleLabel(profile.role)}.\nMini App’ni ochishingiz mumkin.`, {
+        reply_markup: mainKeyboard(webAppUrl),
+      })
+    })
+  })
 
-      const { data: staffCode, error } = await db
-        .from('staff_codes')
-        .select('id, code, role, user_id, is_active')
-        .eq('code', code)
-        .eq('is_active', true)
-        .maybeSingle()
-
-      if (error) throw error
-      if (!staffCode) {
-        await ctx.reply('Kiritilgan kod noto‘g‘ri yoki faol emas.')
-        return
-      }
-
-      if (staffCode.user_id) {
-        const { error: updateError } = await db
-          .from('profiles')
-          .update({ telegram_id: Number(ctx.from.id) })
-          .eq('id', staffCode.user_id)
-        if (updateError) throw updateError
-      }
-
-      await ctx.reply(`Login muvaffaqiyatli yakunlandi. Rol: ${staffCode.role}.\nEndi Mini App ochiladi.`)
+  bot.callbackQuery(/^homework:([0-9a-f-]{36})$/, async (ctx) => {
+    await safeReply(ctx, async () => {
+      const homeworkId = ctx.match[1]
+      await db.selectHomework(ctx.chat.id, homeworkId)
+      await ctx.answerCallbackQuery({ text: 'Vazifa tanlandi.' })
+      await ctx.editMessageText('Endi ushbu vazifa uchun rasm yoki PDF faylini yuboring.')
     })
   })
 

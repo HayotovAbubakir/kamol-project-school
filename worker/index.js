@@ -3,6 +3,7 @@ import { Bot } from 'grammy'
 import { registerHandlers } from '../bot/handlers.mjs'
 import { attendancePush, paymentPush } from '../bot/messages.mjs'
 import { calculateFinanceSummary, validateGroupSchedule } from './domain.js'
+import { hashInviteCode, verifyTelegramInitData } from './telegram-auth.js'
 
 const TABLES = new Set([
   'profiles', 'teachers', 'groups', 'students', 'telegram_links', 'group_students',
@@ -75,7 +76,10 @@ export function canAccessTable(profile, table, action) {
   if (role === 'owner') return true
   if (OWNER_ONLY.has(table)) return false
   if (table === 'monthly_homework_report') return ['admin', 'reception'].includes(role) && action === 'select'
-  if (table === 'payments') return role === 'admin' && ['select', 'insert', 'upsert'].includes(action)
+  if (table === 'payments') {
+    if (role === 'student') return action === 'select'
+    return ['admin', 'reception'].includes(role) && ['select', 'insert', 'upsert'].includes(action)
+  }
   if (table === 'profiles') return action === 'select' && ['admin', 'reception', 'teacher', 'student'].includes(role)
   if (['salary_payments', 'expenses', 'staff_codes'].includes(table)) return false
   if (['teachers', 'groups', 'students', 'group_students'].includes(table)) {
@@ -151,11 +155,12 @@ async function hmacKey(secret) {
   return crypto.subtle.importKey('raw', encoder.encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign', 'verify'])
 }
 
-async function issueToken(profile, env, tokenType, lifetimeMs, jti = crypto.randomUUID()) {
+async function issueToken(profile, env, tokenType, lifetimeMs, jti = crypto.randomUUID(), authMethod = 'password') {
   const payload = base64UrlEncode(JSON.stringify({
     sub: profile.id,
     ver: profile.session_version,
     typ: tokenType,
+    auth_method: authMethod,
     exp: Date.now() + lifetimeMs,
     jti,
   }))
@@ -163,22 +168,22 @@ async function issueToken(profile, env, tokenType, lifetimeMs, jti = crypto.rand
   return `${payload}.${base64UrlEncodeBytes(new Uint8Array(signature))}`
 }
 
-async function issueSession(profile, env, passwordResetRequired = false) {
+async function issueSession(profile, env, passwordResetRequired = false, authMethod = 'password') {
   const refreshId = crypto.randomUUID()
   const [accessToken, refreshToken] = await Promise.all([
-    issueToken(profile, env, 'access', 15 * 60 * 1000),
-    issueToken(profile, env, 'refresh', 30 * 86400000, refreshId),
+    issueToken(profile, env, 'access', 15 * 60 * 1000, crypto.randomUUID(), authMethod),
+    issueToken(profile, env, 'refresh', 30 * 86400000, refreshId, authMethod),
   ])
   const refreshHash = hex(await crypto.subtle.digest('SHA-256', encoder.encode(refreshToken)))
   await env.DB.prepare('INSERT INTO refresh_tokens (token_hash, account_id, expires_at) VALUES (?, ?, ?)')
     .bind(refreshHash, profile.id, Date.now() + 30 * 86400000).run()
   return {
-    user: { ...profile, must_reset_password: passwordResetRequired },
+    user: { ...profile, must_reset_password: passwordResetRequired, auth_method: authMethod },
     session: {
       access_token: accessToken,
       refresh_token: refreshToken,
       expires_at: Math.floor((Date.now() + 15 * 60 * 1000) / 1000),
-      user: { ...profile, must_reset_password: passwordResetRequired },
+      user: { ...profile, must_reset_password: passwordResetRequired, auth_method: authMethod },
     },
   }
 }
@@ -193,9 +198,10 @@ async function authenticate(request, env) {
     if (!valid) return null
     const claims = JSON.parse(base64UrlDecode(payload))
     if (claims.typ !== 'access' || !claims.sub || claims.exp < Date.now()) return null
-    return await env.DB.prepare(`SELECT p.*, a.password_reset_required, a.session_version
+    const profile = await env.DB.prepare(`SELECT p.*, a.password_reset_required, a.session_version
       FROM profiles p JOIN accounts a ON a.id = p.id WHERE p.id = ? AND a.session_version = ?`)
       .bind(claims.sub, claims.ver).first()
+    return profile ? { ...profile, auth_method: claims.auth_method || 'password' } : null
   } catch {
     return null
   }
@@ -289,7 +295,12 @@ async function refreshSession(request, env) {
   if (!parsed.success) return fail('Refresh token noto‘g‘ri.', 400)
   const valid = await isValidToken(env, parsed.data.refresh_token, 'refresh')
   if (!valid) return fail('Session expired.', 401)
-  return json(await issueSession(valid.profile, env, Boolean(valid.profile.password_reset_required)))
+  return json(await issueSession(
+    valid.profile,
+    env,
+    Boolean(valid.profile.password_reset_required),
+    valid.claims.auth_method || 'password',
+  ))
 }
 
 async function signFileUrl(env, origin, key) {
@@ -417,6 +428,62 @@ function createWorkerBotDb(env, origin) {
         .bind(after).all()
       return (rows.results || []).map((row) => ({ id: row.id, table_name: row.table_name, row: JSON.parse(row.row_data) }))
     },
+    async consumeInvite(code, telegramId, staff = false) {
+      const response = await fetch(`${origin}/api/bot/invite/consume`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Bot-Secret': env.BOT_API_SECRET },
+        body: JSON.stringify({ code, telegramId, staff }),
+      })
+      const result = await response.json()
+      if (!response.ok) throw new Error(result.error || 'Ulash kodini ishlatib bo‘lmadi.')
+      return result.data
+    },
+    async getProfileByTelegram(telegramId) {
+      const response = await fetch(`${origin}/api/bot/profile?telegram_id=${encodeURIComponent(telegramId)}`, {
+        headers: { 'X-Bot-Secret': env.BOT_API_SECRET },
+      })
+      const result = await response.json()
+      if (!response.ok) throw new Error(result.error || 'Profilni aniqlab bo‘lmadi.')
+      return result.data
+    },
+    async getStudentHomework(chatId) {
+      const response = await fetch(`${origin}/api/bot/student-homework`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Bot-Secret': env.BOT_API_SECRET },
+        body: JSON.stringify({ chat_id: Number(chatId) }),
+      })
+      const result = await response.json()
+      if (!response.ok) throw new Error(result.error || 'Uy vazifalarini yuklab bo‘lmadi.')
+      return result.data || []
+    },
+    async selectHomework(chatId, homeworkId) {
+      const response = await fetch(`${origin}/api/bot/select-homework`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Bot-Secret': env.BOT_API_SECRET },
+        body: JSON.stringify({ chat_id: Number(chatId), homework_id: homeworkId }),
+      })
+      const result = await response.json()
+      if (!response.ok) throw new Error(result.error || 'Vazifani tanlab bo‘lmadi.')
+      return result.data
+    },
+    async getPendingHomework(chatId) {
+      const response = await fetch(`${origin}/api/bot/pending-homework?chat_id=${encodeURIComponent(chatId)}`, {
+        headers: { 'X-Bot-Secret': env.BOT_API_SECRET },
+      })
+      const result = await response.json()
+      if (!response.ok) throw new Error(result.error || 'Tanlangan vazifa topilmadi.')
+      return result.data
+    },
+    async submitHomework(values) {
+      const response = await fetch(`${origin}/api/bot/submission`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Bot-Secret': env.BOT_API_SECRET },
+        body: JSON.stringify(values),
+      })
+      const result = await response.json()
+      if (!response.ok) throw new Error(result.error || 'Topshiriqni yuborib bo‘lmadi.')
+      return result.data
+    },
     async uploadToR2({ fileStream, fileName, mimeType }) {
       if (!env.FILES) throw new Error('R2 binding is not configured.')
       const bytes = await new Response(fileStream).arrayBuffer()
@@ -498,6 +565,25 @@ async function processBotEvents(env) {
       for (const { chat_id: chatId } of chats.results || []) {
         await bot.api.sendMessage(chatId, text)
       }
+    } else if (row.student_id && event.table_name === 'homework_submissions') {
+      const homework = await env.DB.prepare('SELECT id, title, teacher_id FROM homework WHERE id = ?')
+        .bind(row.homework_id).first()
+      const student = await env.DB.prepare('SELECT name FROM students WHERE id = ?').bind(row.student_id).first()
+      if (row.status === 'pending') {
+        const teachers = await env.DB.prepare('SELECT telegram_id FROM profiles WHERE teacher_id = ? AND telegram_id IS NOT NULL')
+          .bind(homework?.teacher_id || '').all()
+        for (const { telegram_id: telegramId } of teachers.results || []) {
+          await bot.api.sendMessage(telegramId, `Yangi topshiriq yuborildi.\nO‘quvchi: ${student?.name || 'O‘quvchi'}\nVazifa: ${homework?.title || 'Uy vazifasi'}`)
+        }
+      } else if (['approved', 'rejected'].includes(row.status)) {
+        const chats = await env.DB.prepare('SELECT chat_id FROM telegram_links WHERE student_id = ?')
+          .bind(row.student_id).all()
+        const status = row.status === 'approved' ? 'qabul qilindi' : 'qayta ishlash uchun qaytarildi'
+        const comment = row.feedback || row.review_note ? `\nIzoh: ${row.feedback || row.review_note}` : ''
+        for (const { chat_id: chatId } of chats.results || []) {
+          await bot.api.sendMessage(chatId, `Uy vazifangiz ${status}.\nVazifa: ${homework?.title || 'Uy vazifasi'}${comment}`)
+        }
+      }
     }
     await env.DB.prepare("UPDATE bot_event_cursors SET last_event_id = ? WHERE name = 'notifications'")
       .bind(event.id).run()
@@ -533,6 +619,7 @@ async function canRead(env, profile, table, row) {
   if (STAFF.has(profile.role)) return true
   if (table === 'profiles') return row.id === profile.id
   if (table === 'teachers') return row.id === profile.teacher_id
+  if (table === 'payments') return profile.role === 'student' && row.student_id === profile.student_id
   if (table === 'groups') {
     if (profile.role === 'teacher') return teacherOwnsGroup(row, profile.teacher_id)
     return (await membershipGroupIds(env, profile.student_id)).includes(row.id)
@@ -601,7 +688,7 @@ function parseSelect(columns) {
   let match
   let plain = String(columns || '*')
   while ((match = regex.exec(plain))) {
-    if (!['groups', 'students', 'profiles'].includes(match[1])) throw new Error('Unsupported related table')
+    if (!['groups', 'students', 'profiles', 'teachers'].includes(match[1])) throw new Error('Unsupported related table')
     relation.push({ table: match[1], fields: match[2].split(',').map((field) => field.trim()).filter(Boolean) })
   }
   plain = plain.replace(regex, '')
@@ -648,7 +735,13 @@ async function selectRows(env, profile, body, service) {
     if (!/^[a-z_][a-z0-9_]*$/i.test(order.column)) throw new Error('Invalid order column')
     sql += ` ORDER BY "${order.column}" ${order.ascending ? 'ASC' : 'DESC'}`
   }
-  sql += ' LIMIT 10000'
+  const offset = Math.max(0, Math.min(Number(body.offset) || 0, 1000000))
+  const pageSize = Math.max(1, Math.min(Number(limit) || 100, 500))
+  const databasePagination = service || STAFF.has(profile?.role)
+  if (databasePagination) {
+    sql += ' LIMIT ? OFFSET ?'
+    args.push(pageSize, offset)
+  } else sql += ' LIMIT 10000'
   const result = await env.DB.prepare(sql).bind(...args).all()
   let rows = (result.results || []).map((row) => {
     if (typeof row.schedule === 'string') {
@@ -661,19 +754,28 @@ async function selectRows(env, profile, body, service) {
     for (const row of rows) if (await canRead(env, profile, table, row)) allowed.push(row)
     rows = allowed
   }
-  const offset = Math.max(0, Math.min(Number(body.offset) || 0, 1000000))
-  const pageSize = Math.max(1, Math.min(Number(limit) || 100, 500))
-  rows = rows.slice(offset, offset + pageSize)
+  if (!databasePagination) rows = rows.slice(offset, offset + pageSize)
   if (relation.length) {
-    rows = await Promise.all(rows.map(async (row) => {
+    const relatedRows = new Map()
+    for (const link of relation) {
+      const rowId = (row) => link.table === 'groups' ? row.group_id
+        : link.table === 'students' ? row.student_id
+          : link.table === 'teachers' ? row.teacher_id
+            : row.id
+      const ids = [...new Set(rows.map(rowId).filter(Boolean))]
+      const related = ids.length
+        ? await env.DB.prepare(`SELECT * FROM "${link.table}" WHERE id IN (${ids.map(() => '?').join(',')})`).bind(...ids).all()
+        : { results: [] }
+      relatedRows.set(link.table, new Map((related.results || []).map((row) => [row.id, row])))
+    }
+    rows = rows.map((row) => {
       const next = { ...row }
       for (const link of relation) {
         const relationId = link.table === 'groups' ? row.group_id
           : link.table === 'students' ? row.student_id
-            : row.id
-        const related = relationId
-          ? await env.DB.prepare(`SELECT * FROM "${link.table}" WHERE id = ?`).bind(relationId).first()
-          : null
+            : link.table === 'teachers' ? row.teacher_id
+              : row.id
+        const related = relatedRows.get(link.table)?.get(relationId) || null
         const relatedRestricted = restrictedColumns(profile, link.table)
         const selectedFields = link.fields.includes('*')
           ? Object.keys(related || {}).filter((field) => service || !relatedRestricted.has(field))
@@ -683,7 +785,7 @@ async function selectRows(env, profile, body, service) {
           : null
       }
       return next
-    }))
+    })
   }
   if (fields[0] !== '*') {
     rows = rows.map((row) => Object.fromEntries(
@@ -890,6 +992,159 @@ async function authCreate(request, env, actor) {
   return json({ user: { id, username, name, role, teacher_id: teacherId, student_id: studentId }, session: {} }, 201)
 }
 
+async function telegramLogin(request, env) {
+  const parsed = z.object({ initData: z.string().min(1).max(16_384) }).strict().safeParse(await request.json())
+  if (!parsed.success || !env.TELEGRAM_BOT_TOKEN || !env.AUTH_SECRET) {
+    return fail('Telegram orqali kirish sozlanmagan yoki so‘rov noto‘g‘ri.', 400)
+  }
+  const verified = await verifyTelegramInitData(parsed.data.initData, env.TELEGRAM_BOT_TOKEN)
+  if (!verified) return fail('Telegram sessiyasi yaroqsiz yoki eskirgan. Ilovani Telegram ichidan qayta oching.', 401)
+
+  const telegramId = Number(verified.user.id)
+  const matches = await env.DB.prepare(`SELECT DISTINCT p.*, a.password_reset_required, a.session_version
+    FROM profiles p
+    JOIN accounts a ON a.id = p.id
+    LEFT JOIN students s ON s.id = p.student_id
+    LEFT JOIN teachers t ON t.id = p.teacher_id
+    WHERE p.telegram_id = ? OR (p.role = 'student' AND s.telegram_id = ?)
+      OR (p.role = 'teacher' AND t.telegram_id = ?)
+    LIMIT 2`).bind(telegramId, telegramId, telegramId).all()
+  if (matches.results?.length !== 1) {
+    return json({
+      error: 'Ushbu Telegram akkaunti tizimga ulanmagan. Qabulxonadan bir martalik ulash havolasini oling.',
+      code: 'TELEGRAM_NOT_LINKED',
+    }, 403)
+  }
+
+  const profile = matches.results[0]
+  try {
+    const statements = [
+      env.DB.prepare('UPDATE profiles SET telegram_id = ? WHERE id = ?').bind(telegramId, profile.id),
+    ]
+    if (profile.role === 'student' && profile.student_id) {
+      statements.push(env.DB.prepare(`INSERT INTO telegram_links (chat_id, student_id, linked_at)
+        VALUES (?, ?, ?) ON CONFLICT(chat_id) DO UPDATE SET student_id = excluded.student_id, linked_at = excluded.linked_at`)
+        .bind(telegramId, profile.student_id, new Date().toISOString()))
+    }
+    await env.DB.batch(statements)
+  } catch {
+    return fail('Bu Telegram akkaunti boshqa foydalanuvchiga ulangan. Qabulxonaga murojaat qiling.', 409)
+  }
+  return json(await issueSession(
+    profile,
+    env,
+    Boolean(profile.password_reset_required),
+    'telegram',
+  ))
+}
+
+async function createTelegramInvite(request, env, actor) {
+  if (!STAFF.has(actor.role)) return fail('Ruxsat yo‘q.', 403)
+  const parsed = z.object({ profileId: z.string().uuid() }).strict().safeParse(await request.json())
+  if (!parsed.success) return fail('Foydalanuvchi tanlanmagan.', 400)
+  const target = await env.DB.prepare('SELECT id, username, name, role, telegram_id FROM profiles WHERE id = ?')
+    .bind(parsed.data.profileId).first()
+  if (!target) return fail('Foydalanuvchi topilmadi.', 404)
+  if (actor.role !== 'owner' && !['teacher', 'student'].includes(target.role)) {
+    return fail('Bu rol uchun ulash havolasini faqat Owner yaratishi mumkin.', 403)
+  }
+  if (target.telegram_id) return fail('Foydalanuvchining Telegram akkaunti allaqachon ulangan.', 409)
+  if (!env.TELEGRAM_BOT_TOKEN) return fail('Telegram bot sozlanmagan.', 503)
+  let botUsername = env.TELEGRAM_BOT_USERNAME
+  if (!botUsername) {
+    const response = await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/getMe`)
+    const telegram = await response.json()
+    botUsername = telegram.ok && telegram.result?.username
+  }
+  if (!botUsername) return fail('Bot nomini aniqlab bo‘lmadi. Keyinroq qayta urinib ko‘ring.', 502)
+
+  const code = [...crypto.getRandomValues(new Uint8Array(24))]
+    .map((byte) => byte.toString(16).padStart(2, '0')).join('')
+  const codeHash = await hashInviteCode(code)
+  const expiresAt = Date.now() + 15 * 60 * 1000
+  await env.DB.batch([
+    env.DB.prepare('UPDATE telegram_invites SET used_at = ? WHERE profile_id = ? AND used_at IS NULL')
+      .bind(Date.now(), target.id),
+    env.DB.prepare('INSERT INTO telegram_invites (code_hash, profile_id, created_by, expires_at) VALUES (?, ?, ?, ?)')
+      .bind(codeHash, target.id, actor.id, expiresAt),
+  ])
+  const staff = ['admin', 'reception', 'owner'].includes(target.role)
+  const startPayload = staff ? `login_${code}` : code
+  return json({
+    username: target.username,
+    role: target.role,
+    expires_at: expiresAt,
+    invite_url: `https://t.me/${botUsername}?start=${startPayload}`,
+    command: staff ? `/login ${code}` : `https://t.me/${botUsername}?start=${code}`,
+  }, 201)
+}
+
+async function consumeTelegramInvite(request, env) {
+  const parsed = z.object({
+    code: z.string().regex(/^[a-f0-9]{48}$/i),
+    telegramId: z.number().int().positive(),
+    staff: z.boolean().default(false),
+  }).strict().safeParse(await request.json())
+  if (!parsed.success) return fail('Ulash kodi noto‘g‘ri.', 400)
+  const codeHash = await hashInviteCode(parsed.data.code)
+  const invite = await env.DB.prepare(`SELECT i.profile_id, i.expires_at, p.name, p.role, p.student_id
+    FROM telegram_invites i JOIN profiles p ON p.id = i.profile_id
+    WHERE i.code_hash = ? AND i.used_at IS NULL AND i.expires_at > ?`)
+    .bind(codeHash, Date.now()).first()
+  if (!invite) return fail('Ulash kodi yaroqsiz yoki muddati tugagan. Qabulxonadan yangisini oling.', 400)
+  if (parsed.data.staff !== ['admin', 'reception', 'owner'].includes(invite.role)) {
+    return fail('Bu kodni boshqa Telegram buyrug‘i orqali ishlating.', 400)
+  }
+  try {
+    const consumed = await env.DB.prepare(`UPDATE telegram_invites SET used_at = ?
+      WHERE code_hash = ? AND used_at IS NULL AND expires_at > ? RETURNING profile_id`)
+      .bind(Date.now(), codeHash, Date.now()).first()
+    if (!consumed) return fail('Ulash kodi allaqachon ishlatilgan yoki muddati tugagan.', 409)
+    await env.DB.prepare('UPDATE profiles SET telegram_id = ? WHERE id = ?')
+      .bind(parsed.data.telegramId, invite.profile_id).run()
+    if (invite.role === 'student' && invite.student_id) {
+      await env.DB.prepare(`INSERT INTO telegram_links (chat_id, student_id, linked_at)
+        VALUES (?, ?, ?) ON CONFLICT(chat_id) DO UPDATE SET student_id = excluded.student_id, linked_at = excluded.linked_at`)
+        .bind(parsed.data.telegramId, invite.student_id, new Date().toISOString()).run()
+    }
+  } catch {
+    return fail('Telegram akkauntni ulab bo‘lmadi. Qabulxonaga murojaat qiling.', 409)
+  }
+  return json({ data: { name: invite.name, role: invite.role } })
+}
+
+async function botStudentHomework(request, env) {
+  const parsed = z.object({ chat_id: z.number().int().positive() }).strict().safeParse(await request.json())
+  if (!parsed.success) return fail('Noto‘g‘ri so‘rov.', 400)
+  const link = await env.DB.prepare('SELECT student_id FROM telegram_links WHERE chat_id = ?')
+    .bind(parsed.data.chat_id).first()
+  if (!link) return fail('Telegram akkaunt ulanmagan.', 404)
+  const rows = await env.DB.prepare(`SELECT h.id, h.title, h.due_at, hs.status
+    FROM homework h JOIN group_students gs ON gs.group_id = h.group_id
+    LEFT JOIN homework_submissions hs ON hs.homework_id = h.id AND hs.student_id = gs.student_id
+    WHERE gs.student_id = ? AND (hs.status IS NULL OR hs.status = 'rejected')
+    ORDER BY h.due_at LIMIT 50`).bind(link.student_id).all()
+  return json({ data: rows.results || [] })
+}
+
+async function setBotPendingHomework(request, env) {
+  const parsed = z.object({
+    chat_id: z.number().int().positive(),
+    homework_id: z.string().uuid(),
+  }).strict().safeParse(await request.json())
+  if (!parsed.success) return fail('Vazifa tanlanmadi.', 400)
+  const allowed = await env.DB.prepare(`SELECT h.id FROM telegram_links l
+    JOIN group_students gs ON gs.student_id = l.student_id
+    JOIN homework h ON h.group_id = gs.group_id
+    WHERE l.chat_id = ? AND h.id = ?`)
+    .bind(parsed.data.chat_id, parsed.data.homework_id).first()
+  if (!allowed) return fail('Vazifa topilmadi yoki sizga tegishli emas.', 403)
+  await env.DB.prepare(`INSERT INTO bot_pending_homework (chat_id, homework_id, expires_at)
+    VALUES (?, ?, ?) ON CONFLICT(chat_id) DO UPDATE SET homework_id = excluded.homework_id, expires_at = excluded.expires_at`)
+    .bind(parsed.data.chat_id, parsed.data.homework_id, Date.now() + 30 * 60 * 1000).run()
+  return json({ data: true })
+}
+
 async function handleRpc(request, env, actor, name) {
   const args = await request.json()
   if (name === 'lookup_login_email') {
@@ -924,7 +1179,9 @@ async function handleDatabase(request, env, profile, service) {
   if (!parsed.success) return fail('Invalid database request.')
   const body = parsed.data
   if (!TABLES.has(body.table)) return fail('Unknown table.')
-  if (profile?.password_reset_required) return fail('Davom etish uchun parolni yangilang.', 403)
+  if (profile?.password_reset_required && profile.auth_method !== 'telegram') {
+    return fail('Davom etish uchun parolni yangilang.', 403)
+  }
   if (body.table === 'staff_codes' && !service && !STAFF.has(profile?.role)) return fail('Access denied.', 403)
   if (body.table === 'telegram_links' && !service && !STAFF.has(profile?.role)) return fail('Access denied.', 403)
   if (!service && !profile) return fail('Login required.', 401)
@@ -957,6 +1214,12 @@ async function handleBot(request, env, pathname) {
     const student = link && await env.DB.prepare('SELECT id, name, phone, parent_phone, public_code, monthly_fee FROM students WHERE id = ?').bind(link.student_id).first()
     return json({ data: link ? { ...link, students: student } : null })
   }
+  if (pathname === '/api/bot/profile') {
+    const telegramId = Number(new URL(request.url).searchParams.get('telegram_id'))
+    const profile = await env.DB.prepare('SELECT name, role FROM profiles WHERE telegram_id = ?')
+      .bind(telegramId).first()
+    return json({ data: profile || null })
+  }
   if (pathname === '/api/bot/link') {
     const { chat_id, student_id } = await request.json()
     await env.DB.prepare('INSERT INTO telegram_links (chat_id, student_id, linked_at) VALUES (?, ?, ?) ON CONFLICT(chat_id) DO UPDATE SET student_id = excluded.student_id, linked_at = excluded.linked_at')
@@ -981,14 +1244,31 @@ async function handleBot(request, env, pathname) {
     const rows = await env.DB.prepare('SELECT h.* FROM homework h JOIN group_students gs ON gs.group_id = h.group_id WHERE gs.student_id = ? ORDER BY h.due_at').bind(student_id).all()
     return json({ data: rows.results || [] })
   }
+  if (pathname === '/api/bot/student-homework') return botStudentHomework(request, env)
+  if (pathname === '/api/bot/pending-homework') {
+    const chatId = Number(new URL(request.url).searchParams.get('chat_id'))
+    const row = await env.DB.prepare(`SELECT p.homework_id, h.title FROM bot_pending_homework p
+      JOIN homework h ON h.id = p.homework_id WHERE p.chat_id = ? AND p.expires_at > ?`)
+      .bind(chatId, Date.now()).first()
+    return json({ data: row || null })
+  }
+  if (pathname === '/api/bot/select-homework') return setBotPendingHomework(request, env)
+  if (pathname === '/api/bot/invite/consume') return consumeTelegramInvite(request, env)
   if (pathname === '/api/bot/submission') {
     const body = await request.json()
-    const { text_answer = '', content_text = '', feedback = '', review_note = '', ...data } = body
+    const { text_answer = '', content_text = '', feedback = '', review_note = '', chat_id, ...data } = body
+    const pending = chat_id && await env.DB.prepare(`SELECT p.homework_id, l.student_id
+      FROM bot_pending_homework p JOIN telegram_links l ON l.chat_id = p.chat_id
+      WHERE p.chat_id = ? AND p.expires_at > ?`).bind(Number(chat_id), Date.now()).first()
+    if (!pending || pending.homework_id !== data.homework_id || pending.student_id !== data.student_id) {
+      return fail('Tanlangan vazifa topilmadi yoki muddati tugagan.', 403)
+    }
     const id = data.id || crypto.randomUUID()
     await env.DB.prepare(`INSERT INTO homework_submissions (id, homework_id, student_id, file_url, text_answer, content_text, status, feedback, review_note, submitted_at)
       VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)
       ON CONFLICT(homework_id, student_id) DO UPDATE SET file_url=excluded.file_url, text_answer=excluded.text_answer, content_text=excluded.content_text, status='pending', feedback='', review_note='', submitted_at=excluded.submitted_at`)
       .bind(id, data.homework_id, data.student_id, data.file_url || null, text_answer || content_text, content_text || text_answer, feedback, review_note, data.submitted_at || new Date().toISOString()).run()
+    await env.DB.prepare('DELETE FROM bot_pending_homework WHERE chat_id = ?').bind(Number(chat_id)).run()
     return json({ data: true })
   }
   if (pathname === '/api/bot/staff-code') {
@@ -1193,6 +1473,7 @@ async function handleRequest(request, env) {
   if (url.pathname === '/api/auth/seed-owner' && request.method === 'POST') return handleOwnerSeed(request, env)
   if (url.pathname.startsWith('/api/bot/')) return handleBot(request, env, url.pathname)
   if (url.pathname.startsWith('/api/files/') && request.method === 'GET') return handleFileDownload(request, env)
+  if (url.pathname === '/api/auth/telegram' && request.method === 'POST') return telegramLogin(request, env)
   if (url.pathname === '/api/auth/login' && request.method === 'POST') return authLogin(request, env)
   if (url.pathname === '/api/auth/refresh' && request.method === 'POST') return refreshSession(request, env)
 
@@ -1202,6 +1483,10 @@ async function handleRequest(request, env) {
     return profile
       ? json({ user: { ...profile, must_reset_password: Boolean(profile.password_reset_required) } })
       : fail('Session expired.', 401)
+  }
+  if (url.pathname === '/api/telegram/invites' && request.method === 'POST') {
+    if (!profile) return fail('Login required.', 401)
+    return createTelegramInvite(request, env, profile)
   }
   if (url.pathname === '/api/auth/logout' && request.method === 'POST') {
     if (!profile) return fail('Login required.', 401)
@@ -1224,7 +1509,8 @@ async function handleRequest(request, env) {
       FROM profiles p JOIN accounts a ON a.id = p.id WHERE p.id = ?`).bind(profile.id).first()
     return json(await issueSession(updated, env, false))
   }
-  if (profile?.password_reset_required && !['/api/auth/me', '/api/auth/logout', '/api/auth/update'].includes(url.pathname)) {
+  if (profile?.password_reset_required && profile.auth_method !== 'telegram'
+    && !['/api/auth/me', '/api/auth/logout', '/api/auth/update'].includes(url.pathname)) {
     return fail('Davom etish uchun parolni yangilang.', 403)
   }
   if (url.pathname === '/api/finance/summary' && request.method === 'GET') {

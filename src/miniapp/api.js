@@ -19,6 +19,12 @@ export async function fetchProfile(userId) {
 
 async function uploadFile(file, context) {
   if (!file) return null
+  if (file.size <= 0 || file.size > 10 * 1024 * 1024) {
+    throw new Error('Fayl hajmi 10 MB dan oshmasligi kerak.')
+  }
+  if (!['application/pdf', 'image/jpeg', 'image/png', 'image/webp'].includes(file.type)) {
+    throw new Error('Faqat PDF, JPG, PNG yoki WebP fayl yuborish mumkin.')
+  }
   const { data: sessionData } = await cloudflare.auth.getSession()
   if (!sessionData.session?.access_token) throw new Error('Fayl yuklash uchun tizimga kiring.')
   const form = new FormData()
@@ -49,12 +55,14 @@ export async function loadHomeworks(profile) {
     homeworks = unwrap(await cloudflare.from('homework')
       .select('id, group_id, teacher_id, title, description, file_url, due_at, groups(name)')
       .in('group_id', groupIds)
-      .order('due_at', { ascending: true }))
+      .order('due_at', { ascending: true })
+      .limit(100))
     if (!homeworks.length) return []
     const submissions = unwrap(await cloudflare.from('homework_submissions')
       .select('id, homework_id, content_text, file_url, status, feedback, submitted_at')
       .eq('student_id', profile.student_id)
-      .in('homework_id', homeworks.map((task) => task.id)))
+      .in('homework_id', homeworks.map((task) => task.id))
+      .limit(500))
     const byHomework = new Map(submissions.map((submission) => [submission.homework_id, submission]))
     return homeworks.map((task) => ({ ...task, submission: byHomework.get(task.id) || null }))
   }
@@ -62,6 +70,7 @@ export async function loadHomeworks(profile) {
   let query = cloudflare.from('homework')
     .select('id, group_id, teacher_id, title, description, file_url, due_at, groups(name)')
     .order('due_at', { ascending: true })
+    .limit(100)
   if (profile.role === 'teacher') query = query.eq('teacher_id', profile.teacher_id)
   homeworks = unwrap(await query)
   if (!homeworks.length) return []
@@ -69,7 +78,8 @@ export async function loadHomeworks(profile) {
   const submissions = unwrap(await cloudflare.from('homework_submissions')
     .select('id, homework_id, student_id, content_text, file_url, status, feedback, submitted_at, students(name)')
     .in('homework_id', homeworks.map((task) => task.id))
-    .order('submitted_at', { ascending: false }))
+    .order('submitted_at', { ascending: false })
+    .limit(500))
   const byHomework = new Map()
   for (const submission of submissions) {
     const list = byHomework.get(submission.homework_id) || []
@@ -79,9 +89,15 @@ export async function loadHomeworks(profile) {
   return homeworks.map((task) => ({ ...task, submissions: byHomework.get(task.id) || [] }))
 }
 
-export async function loadGroups() {
+export async function loadGroups(profile) {
   assertConfigured()
-  return unwrap(await cloudflare.from('groups').select('id, name').order('name'))
+  const columns = profile?.role === 'teacher'
+    ? 'id, name, teacher_id, schedule'
+    : 'id, name, teacher_id, monthly_fee, schedule'
+  return unwrap(await cloudflare.from('groups')
+    .select(columns)
+    .order('name')
+    .limit(500))
 }
 
 export async function createHomework(profile, input) {
@@ -89,14 +105,17 @@ export async function createHomework(profile, input) {
   if (!profile.teacher_id) throw new Error('O‘qituvchi profili guruhga bog‘lanmagan.')
   let fileUrl = null
   if (input.file) fileUrl = await uploadFile(input.file, { groupId: input.groupId })
+  const deadline = input.deadline
+    ? new Date(`${input.deadline}:00+05:00`).toISOString()
+    : null
 
   const { data, error } = await cloudflare.from('homework').insert({
     teacher_id: profile.teacher_id,
     group_id: input.groupId,
     title: input.title.trim(),
     description: input.description.trim(),
-    due_at: input.deadline ? new Date(input.deadline).toISOString() : null,
-    deadline: input.deadline ? new Date(input.deadline).toISOString() : null,
+    due_at: deadline,
+    deadline,
     file_url: fileUrl,
   }).select('id').single()
   if (error) throw error
@@ -135,16 +154,28 @@ export async function reviewSubmission(id, status, feedback, reviewerId) {
   if (error) throw error
 }
 
-export async function loadStudents() {
+export async function loadStudents(profile) {
   assertConfigured()
-  return unwrap(await cloudflare.from('students')
-    .select('id, name, phone, login, auth_user_id')
-    .order('name'))
+  const columns = profile?.role === 'teacher'
+    ? 'id, name, phone'
+    : 'id, name, phone, login, auth_user_id, parent_phone, monthly_fee'
+  const students = unwrap(await cloudflare.from('students').select(columns).order('name').limit(500))
+  if (profile?.role === 'teacher' || !students.length) return students
+  const profiles = unwrap(await cloudflare.from('profiles')
+    .select('id, student_id, telegram_id')
+    .in('student_id', students.map((student) => student.id)))
+  const byStudent = new Map(profiles.map((item) => [item.student_id, item]))
+  return students.map((item) => ({
+    ...item,
+    profile_id: byStudent.get(item.id)?.id || item.auth_user_id || null,
+    telegram_id: byStudent.get(item.id)?.telegram_id || null,
+  }))
 }
 
 export async function loadMonthlyReport() {
   assertConfigured()
   return unwrap(await cloudflare.from('monthly_homework_report')
     .select('student_id, student_name, month_start, total_submissions, approved_count, rejected_count, pending_count')
-    .order('month_start', { ascending: false }))
+    .order('month_start', { ascending: false })
+    .limit(500))
 }
