@@ -77,9 +77,10 @@ Repository → **Settings → Secrets and variables → Actions** ichida quyidag
 
 ### Joriy bajarilish holati
 
-- Uchta mantiqiy commit `master` branch'iga push qilindi: `2e3e549`, `a48f426`, `7de5352`.
+- Uchta funksional commit va holat hujjati `master` branch'iga push qilindi: `2e3e549`, `a48f426`, `7de5352`, `06cad01`.
 - Toza `npm ci`, `npm run lint`, `npm test` (**8 test passed**), `npm run build` va `npm audit` muvaffaqiyatli; dependency audit **0 vulnerability** qaytardi.
-- [GitHub Actions run 42267277184](https://github.com/HayotovAbubakir/kamol-project-school/actions/runs/42267277184): `verify` job muvaffaqiyatli tugadi. `deploy` job `Validate deploy secrets` bosqichida to‘xtadi, chunki repository’da quyidagilar yo‘q: `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_API_URL`, `AUTH_SECRET`, `BOT_API_SECRET`, `MIGRATION_SECRET`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_WEBHOOK_SECRET`.
+- `migrations/` ichidagi ikkala SQL migratsiya SQLite’da xatosiz qo‘llandi; 19 jadval va `monthly_homework_report` view yaratildi.
+- [GitHub Actions run 42267602045](https://github.com/HayotovAbubakir/kamol-project-school/actions/runs/42267602045): `verify` job muvaffaqiyatli tugadi. `deploy` job `Validate deploy secrets` bosqichida to‘xtadi, chunki repository’da quyidagilar yo‘q: `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_API_URL`, `AUTH_SECRET`, `BOT_API_SECRET`, `MIGRATION_SECRET`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_WEBHOOK_SECRET`.
 - Shu sabab D1/R2 resurslari, Worker deployment, webhook, data import va live health check bajarilmadi. Live URL mavjud emas yoki bu ishda tekshirilmagan; deploy muvaffaqiyati da’vo qilinmaydi.
 
 ### Egasi bajarishi kerak bo‘lgan aniq qadamlar
