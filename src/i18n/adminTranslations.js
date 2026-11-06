@@ -347,8 +347,6 @@ export const adminTranslations = {
     'admin.form.contacts': 'Contacts',
     'admin.form.account': 'System login',
     'admin.label.lessons': 'Lessons',
-    'admin.label.monthlyFee': 'Monthly fee',
-    'admin.label.monthlyFeeSum': 'Monthly fee (UZS)',
     'admin.label.monthlySalary': 'Monthly salary (UZS)',
     'admin.label.parent': 'Parent',
     'admin.label.parentPhone': 'Parent phone',

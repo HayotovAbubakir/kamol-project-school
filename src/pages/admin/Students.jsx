@@ -1,4 +1,4 @@
-import { Banknote, Copy, GraduationCap, Pencil, Plus, Trash2, Wallet, X } from 'lucide-react'
+import { Banknote, Copy, GraduationCap, KeyRound, Pencil, Plus, Trash2, Wallet, X } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import PhoneInput from '../../components/PhoneInput'
@@ -23,6 +23,7 @@ import { useLanguage } from '../../context/LanguageContext'
 import { amountPaidForMonth, isStudentDebtor, remainingFee, studentPaidForMonth } from '../../lib/store'
 import { parseParentPhones, formatPhoneDisplay, isCompletePhone, isEmptyPhone, phoneFieldState } from '../../lib/phone'
 import { matchesSearch, studentSearchFields } from '../../lib/search'
+import { resetStudentCredentials } from '../../lib/api'
 import { currentMonthYear, formatMoney, formatPhone, joinPersonName, splitPersonName, todayISO } from '../../lib/utils'
 
 const emptyForm = () => ({
@@ -50,6 +51,7 @@ export default function AdminStudents() {
   const [payOpen, setPayOpen] = useState(false)
   const [newCredentials, setNewCredentials] = useState(null)
   const [credentialsCopied, setCredentialsCopied] = useState(false)
+  const [credentialsBusy, setCredentialsBusy] = useState(false)
   const [payAmount, setPayAmount] = useState('')
   const [paying, setPaying] = useState(false)
   const [addGroupId, setAddGroupId] = useState('')
@@ -79,6 +81,7 @@ export default function AdminStudents() {
     if (!search.trim()) return
     if (!filteredStudents.length) return
     if (!filteredStudents.some((s) => s.id === selectedId)) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setSelectedId(filteredStudents[0].id)
     }
   }, [search, filteredStudents, selectedId])
@@ -91,6 +94,7 @@ export default function AdminStudents() {
     if (!fromQuery) return
     if (!data.students.length) return
     if (data.students.some((s) => s.id === fromQuery)) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setSelectedId(fromQuery)
     }
     const next = new URLSearchParams(searchParams)
@@ -100,10 +104,12 @@ export default function AdminStudents() {
 
   useEffect(() => {
     if (!payOpen || !selected) return
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setPayAmount(String(Math.max(0, Math.round(selectedDue))))
-  }, [payOpen, selected?.id, selectedDue])
+  }, [payOpen, selected, selectedDue])
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setAddGroupId('')
     setCodeCopied(false)
   }, [selected?.id])
@@ -116,6 +122,20 @@ export default function AdminStudents() {
       setTimeout(() => setCodeCopied(false), 2000)
     } catch {
       /* ignore */
+    }
+  }
+
+  const issueTemporaryPassword = async () => {
+    if (!selected || credentialsBusy) return
+    setCredentialsBusy(true)
+    setError('')
+    try {
+      setCredentialsCopied(false)
+      setNewCredentials(await resetStudentCredentials(selected, data.users))
+    } catch (resetError) {
+      setError(resetError.message || 'Vaqtinchalik parolni o‘rnatib bo‘lmadi.')
+    } finally {
+      setCredentialsBusy(false)
     }
   }
 
@@ -402,6 +422,9 @@ export default function AdminStudents() {
             </button>
             <button type="button" className="btn btn-outline btn-sm" onClick={() => openEdit(selected)}>
               <Pencil size={14} /> {t('common.edit')}
+            </button>
+            <button type="button" className="btn btn-outline btn-sm" onClick={issueTemporaryPassword} disabled={credentialsBusy}>
+              <KeyRound size={14} /> {credentialsBusy ? 'Tayyorlanmoqda…' : 'Vaqtinchalik parol'}
             </button>
           </div>
 

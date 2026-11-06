@@ -166,6 +166,7 @@ export function WallpaperProvider({ children }) {
   return <WallpaperContext.Provider value={value}>{children}</WallpaperContext.Provider>
 }
 
+// eslint-disable-next-line react-refresh/only-export-components
 export function useWallpaper() {
   const ctx = useContext(WallpaperContext)
   if (!ctx) throw new Error('useWallpaper must be used within WallpaperProvider')

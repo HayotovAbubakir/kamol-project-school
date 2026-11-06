@@ -1,6 +1,6 @@
 import { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import { fetchProfile } from '../lib/api'
-import { clearAuthStorage, isSupabaseConfigured, supabase, usernameToEmailCandidates } from '../lib/supabase'
+import { clearAuthStorage, cloudflare } from '../lib/cloudflare'
 import { translate } from '../i18n/runtime'
 
 const AuthContext = createContext(null)
@@ -13,22 +13,19 @@ function sameUser(a, b) {
     && a.username === b.username
     && a.name === b.name
     && a.teacherId === b.teacherId
+    && a.mustResetPassword === b.mustResetPassword
 }
 
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null)
   const [ready, setReady] = useState(false)
-  const [configErrorKey, setConfigErrorKey] = useState(null)
   const userRef = useRef(null)
-  userRef.current = user
 
   useEffect(() => {
-    if (!isSupabaseConfigured || !supabase) {
-      setConfigErrorKey('domain.error.supabaseProjectNotConfigured')
-      setReady(true)
-      return undefined
-    }
+    userRef.current = user
+  }, [user])
 
+  useEffect(() => {
     let cancelled = false
 
     const applySession = async (session, { forceProfile = false } = {}) => {
@@ -51,6 +48,7 @@ export function AuthProvider({ children }) {
           name: profile.name,
           role: profile.role,
           teacherId: profile.teacherId,
+          mustResetPassword: Boolean(session.user.must_reset_password),
         }
         setUser((prev) => (sameUser(prev, next) ? prev : next))
       } catch {
@@ -58,15 +56,18 @@ export function AuthProvider({ children }) {
       }
     }
 
-    supabase.auth.getSession().then(({ data }) => {
+    cloudflare.auth.getSession().then(({ data }) => {
       applySession(data.session, { forceProfile: true }).finally(() => {
         if (!cancelled) setReady(true)
       })
     })
 
-    const { data: sub } = supabase.auth.onAuthStateChange((event, session) => {
-      if (event === 'TOKEN_REFRESHED' || event === 'USER_UPDATED') {
-        // Sessiya yangilandi — UI ni qayta yuklamaymiz
+    const { data: sub } = cloudflare.auth.onAuthStateChange((event, session) => {
+      if (event === 'TOKEN_REFRESHED') {
+        return
+      }
+      if (event === 'USER_UPDATED') {
+        setUser((previous) => previous ? { ...previous, mustResetPassword: false } : previous)
         return
       }
       if (event === 'SIGNED_OUT') {
@@ -88,8 +89,6 @@ export function AuthProvider({ children }) {
         user,
         ready,
         async login(username, password) {
-          if (!supabase) throw new Error(translate('domain.error.supabaseNotConfigured'))
-
           const finishLogin = async (authUser) => {
             const profile = await fetchProfile(authUser.id)
             const next = {
@@ -98,57 +97,31 @@ export function AuthProvider({ children }) {
               name: profile.name,
               role: profile.role,
               teacherId: profile.teacherId,
+              mustResetPassword: Boolean(authUser.must_reset_password),
             }
             setUser(next)
             return next
           }
 
-          const tryPassword = async (email) => {
-            const { data, error } = await supabase.auth.signInWithPassword({ email, password })
-            if (error) return { error }
-            if (!data.user) return { error: new Error(translate('login.error.generic')) }
-            return { user: data.user }
-          }
-
           const failFriendly = (err) => {
             const msg = err?.message || ''
-            if (/invalid login|invalid credentials|email not confirmed/i.test(msg)) {
+            if (/invalid login|invalid credentials|email not confirmed|login yoki parol/i.test(msg)) {
               return new Error(translate('login.error.invalidCredentials'))
             }
             return err || new Error(translate('login.error.generic'))
           }
 
-          // 1) DB dan aniq email — bitta urinish, console 400 spam yo‘q
-          try {
-            const { data: resolved, error: rpcError } = await supabase.rpc('lookup_login_email', {
-              p_login: String(username || '').trim(),
-            })
-            if (!rpcError && resolved) {
-              const result = await tryPassword(resolved)
-              if (result.user) return finishLogin(result.user)
-              throw failFriendly(result.error)
-            }
-          } catch (err) {
-            if (err?.message === translate('login.error.invalidCredentials')) throw err
-            if (err?.message && !/function|rpc|pgrst/i.test(err.message)) throw err
-            /* RPC yo‘q — fallback */
-          }
-
-          // 2) Fallback (schema hali yangilanmagan bo‘lsa)
-          let lastError = null
-          for (const email of usernameToEmailCandidates(username)) {
-            const result = await tryPassword(email)
-            if (result.user) return finishLogin(result.user)
-            lastError = result.error
-          }
-          throw failFriendly(lastError)
+          const { data, error } = await cloudflare.auth.signInWithPassword({ username, password })
+          if (error) throw failFriendly(error)
+          if (!data.user) throw failFriendly(new Error(translate('login.error.generic')))
+          return finishLogin(data.user)
         },
         async logout() {
           try {
-            if (supabase) await supabase.auth.signOut({ scope: 'global' })
+            await cloudflare.auth.signOut({ scope: 'global' })
           } catch {
             try {
-              if (supabase) await supabase.auth.signOut({ scope: 'local' })
+              await cloudflare.auth.signOut({ scope: 'local' })
             } catch {
               /* ignore */
             }
@@ -160,11 +133,11 @@ export function AuthProvider({ children }) {
       }
       Object.defineProperty(contextValue, 'configError', {
         enumerable: true,
-        get: () => (configErrorKey ? translate(configErrorKey) : null),
+        value: null,
       })
       return contextValue
     },
-    [user, ready, configErrorKey],
+    [user, ready],
   )
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>

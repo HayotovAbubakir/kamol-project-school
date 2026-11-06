@@ -7,7 +7,7 @@ import LiveBackground from '../components/atmosphere/LiveBackground'
 import { useAuth } from '../context/AuthContext'
 import { useLanguage } from '../context/LanguageContext'
 import { getRoleHome } from '../lib/auth'
-import { MIN_PASSWORD_LENGTH } from '../lib/supabase'
+import { MIN_PASSWORD_LENGTH } from '../lib/cloudflare'
 
 export default function Login() {
   const { user, login, ready, configError } = useAuth()

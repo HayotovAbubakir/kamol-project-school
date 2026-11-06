@@ -51,12 +51,13 @@ export default function OwnerDebtors() {
 
   useEffect(() => {
     if (!selected) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setAmountInput('')
       return
     }
     setAmountInput(String(Math.max(0, Math.round(selected.due))))
     setError('')
-  }, [selected?.id, selected?.due])
+  }, [selected])
 
   const payAmount = Number(amountInput)
 

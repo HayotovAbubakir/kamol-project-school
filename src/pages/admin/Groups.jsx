@@ -94,6 +94,7 @@ export default function AdminGroups() {
     if (!search.trim()) return
     if (!filteredGroups.length) return
     if (!filteredGroups.some((group) => group.id === selectedId)) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setSelectedId(filteredGroups[0].id)
     }
   }, [search, filteredGroups, selectedId])

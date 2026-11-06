@@ -12,7 +12,6 @@ import {
   getLast6MonthsTrend,
   getTodayAbsentCount,
   formatLessonTime,
-  getTodayDayValue,
   getTodayLessons,
   getTrendDelta,
   getTrendSparkline,

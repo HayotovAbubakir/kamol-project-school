@@ -1,12 +1,12 @@
-import { supabase, usernameToEmail, usernameToEmailCandidates, normalizeUsername, MIN_PASSWORD_LENGTH } from './supabase'
+import { cloudflare, usernameToEmail, usernameToEmailCandidates, normalizeUsername, MIN_PASSWORD_LENGTH } from './cloudflare'
 import { currentMonthYear, todayISO, toStoredExpenseCategory } from './utils'
 import { primaryGroupTeacherId, studentMonthlyFee, validateGroupSchedule } from './store'
 import { translate } from '../i18n/runtime'
 import { normalizePhone, packParentPhones, parseParentPhones } from './phone'
 
 function requireClient() {
-  if (!supabase) throw new Error(translate('domain.error.supabaseNotConfigured'))
-  return supabase
+  if (!cloudflare) throw new Error('Cloudflare Worker API is unavailable.')
+  return cloudflare
 }
 
 function throwDbError(error, fallbackKey = 'domain.error.dataLoadFailed') {
@@ -144,8 +144,10 @@ function mapProfile(row) {
   }
 }
 
-export async function loadAll() {
+export async function loadAll(role = 'owner') {
   const db = requireClient()
+  const isOwner = role === 'owner'
+  const isAdmin = role === 'admin'
 
   const [
     profilesRes,
@@ -163,9 +165,9 @@ export async function loadAll() {
     db.from('groups').select('*').order('created_at'),
     db.from('students').select('*').order('created_at'),
     db.from('group_students').select('*'),
-    db.from('payments').select('*').order('paid_at'),
-    db.from('salary_payments').select('*').order('paid_at'),
-    db.from('expenses').select('*').order('date', { ascending: false }),
+    (isOwner || isAdmin) ? db.from('payments').select('*').order('paid_at') : Promise.resolve({ data: [], error: null }),
+    isOwner ? db.from('salary_payments').select('*').order('paid_at') : Promise.resolve({ data: [], error: null }),
+    isOwner ? db.from('expenses').select('*').order('date', { ascending: false }) : Promise.resolve({ data: [], error: null }),
     db.from('attendance').select('*').order('date', { ascending: false }),
   ])
 
@@ -206,10 +208,10 @@ export async function loadAll() {
 }
 
 export async function fetchProfile(userId) {
-  const db = requireClient()
-  const { data, error } = await db.from('profiles').select('*').eq('id', userId).single()
+  const { data, error } = await requireClient().auth.getUser()
   if (error) throw error
-  return mapProfile(data)
+  if (!data.user || data.user.id !== userId) throw new Error('Foydalanuvchi profili topilmadi.')
+  return mapProfile(data.user)
 }
 
 export async function addTeacher(payload) {
@@ -590,6 +592,45 @@ export async function updateStudent(id, updates) {
   }
 }
 
+export async function resetUserCredentials(user) {
+  const db = requireClient()
+  const password = `kp${String(crypto.getRandomValues(new Uint32Array(1))[0] % 100000).padStart(5, '0')}s`
+  let username = user.username || ''
+  if (!username) {
+    const { data, error } = await db.from('profiles').select('username').eq('id', user.id).maybeSingle()
+    if (error) throw error
+    username = data?.username || ''
+  }
+  if (!username) throw new Error('Foydalanuvchining login ma’lumoti topilmadi.')
+
+  const { error } = await db.rpc('staff_set_user_password', {
+    target_user: user.id,
+    new_password: password,
+  })
+  if (error) throw new Error(error.message || 'Vaqtinchalik parolni o‘rnatib bo‘lmadi.')
+  return { username, password }
+}
+
+export async function resetStudentCredentials(student, users = []) {
+  const db = requireClient()
+  const linkedUser = users.find((user) => user.studentId === student.id)
+  const userId = student.authUserId || linkedUser?.id
+  if (userId) {
+    return resetUserCredentials({
+      id: userId,
+      username: student.username || linkedUser?.username,
+    })
+  }
+
+  const credentials = await createStudentCredentials(db, { studentId: student.id, name: student.name })
+  const { error } = await db.from('students').update({
+    login: credentials.username,
+    auth_user_id: credentials.userId,
+  }).eq('id', student.id)
+  if (error) throw error
+  return { username: credentials.username, password: credentials.password }
+}
+
 export async function deleteStudent(id) {
   const db = requireClient()
 
@@ -703,11 +744,8 @@ export async function markAttendance({ studentId, groupId, status, note, markedB
 }
 
 async function restoreSession(db, session) {
-  if (session?.access_token && session?.refresh_token) {
-    await db.auth.setSession({
-      access_token: session.access_token,
-      refresh_token: session.refresh_token,
-    })
+  if (session?.access_token) {
+    await db.auth.setSession({ access_token: session.access_token })
     return
   }
   try {
@@ -850,12 +888,12 @@ async function createLinkedAccount({ username, password, name, role, teacherId =
     studentId,
   })
 
-  // Confirm email yoqilgan bo‘lsa session bo‘lmaydi — login ishlamaydi
+  // Akkaunt yaratilgan bo‘lsa ham sessiyasiz foydalanuvchini tizimga kiritmaymiz.
   if (!data.session) {
     throw new Error(translate('domain.error.authEmailConfirmOn'))
   }
 
-  return data.user
+  return { ...data, teacherId: data.teacher_id }.user
 }
 
 export async function updateOwnCredentials({ username, password }) {

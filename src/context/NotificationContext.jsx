@@ -39,7 +39,8 @@ export function NotificationProvider({ children }) {
   // Joriy oy live xabarlarini arxivga yozish
   useEffect(() => {
     if (!isStaff || !initialized) return
-    const live = buildStaffNotifications(data, t, now)
+    const live = buildStaffNotifications(data, t, { month: now.month, year: now.year })
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setArchive(mergeLiveIntoArchive(live))
   }, [isStaff, initialized, data, t, now.month, now.year])
 
@@ -111,6 +112,7 @@ export function NotificationProvider({ children }) {
 
   useEffect(() => {
     if (!isStaff || !onNotificationsPage) return
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     markAllRead()
   }, [isStaff, onNotificationsPage, markAllRead])
 

@@ -1,7 +1,8 @@
-import { Eye, EyeOff, Pencil, Plus, Trash2, UserCog } from 'lucide-react'
+import { Eye, EyeOff, KeyRound, Pencil, Plus, Trash2, UserCog } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import PhoneInput from '../../components/PhoneInput'
 import { PageEnter } from '../../components/motion/PageMotion'
+import TemporaryCredentialsModal from '../../components/TemporaryCredentialsModal'
 import {
   Avatar,
   GlowButton,
@@ -20,7 +21,8 @@ import { formatPhone, joinPersonName, splitPersonName } from '../../lib/utils'
 import { isCompletePhone, isEmptyPhone, phoneFieldState } from '../../lib/phone'
 import { matchesSearch, teacherSearchFields } from '../../lib/search'
 import { groupsForTeacher } from '../../lib/store'
-import { MIN_PASSWORD_LENGTH } from '../../lib/supabase'
+import { MIN_PASSWORD_LENGTH } from '../../lib/cloudflare'
+import { resetUserCredentials } from '../../lib/api'
 
 const emptyForm = () => ({ firstName: '', lastName: '', phone: '', username: '', password: '' })
 
@@ -37,6 +39,8 @@ export default function AdminTeachers() {
   const [hasLinkedLogin, setHasLinkedLogin] = useState(false)
   const [showPassword, setShowPassword] = useState(false)
   const [search, setSearch] = useState('')
+  const [temporaryCredentials, setTemporaryCredentials] = useState(null)
+  const [resettingPassword, setResettingPassword] = useState(false)
 
   const linkedLogins = data.users.filter((u) => u.role === 'teacher')
 
@@ -49,6 +53,7 @@ export default function AdminTeachers() {
     if (!search.trim()) return
     if (!filteredTeachers.length) return
     if (!filteredTeachers.some((teacher) => teacher.id === selectedId)) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setSelectedId(filteredTeachers[0].id)
     }
   }, [search, filteredTeachers, selectedId])
@@ -159,6 +164,18 @@ export default function AdminTeachers() {
     }
   }
 
+  const resetTeacherPassword = async (user) => {
+    if (!user || resettingPassword) return
+    setResettingPassword(true)
+    try {
+      setTemporaryCredentials(await resetUserCredentials(user))
+    } catch (err) {
+      await alert({ message: err.message || 'Vaqtinchalik parolni o‘rnatib bo‘lmadi.', tone: 'danger' })
+    } finally {
+      setResettingPassword(false)
+    }
+  }
+
   const renderDetail = () => {
     if (!selected) {
       return <div className="master-detail-empty">{t('admin.teacher.select')}</div>
@@ -195,6 +212,14 @@ export default function AdminTeachers() {
         <div className="page-header-actions" style={{ marginBottom: 8 }}>
           <button type="button" className="btn btn-outline btn-sm" onClick={() => openEdit(selected)}>
             <Pencil size={14} /> {t('common.edit')}
+          </button>
+          <button
+            type="button"
+            className="btn btn-outline btn-sm"
+            onClick={() => resetTeacherPassword(login)}
+            disabled={!login || resettingPassword}
+          >
+            <KeyRound size={14} /> {resettingPassword ? 'Tayyorlanmoqda…' : 'Vaqtinchalik parol'}
           </button>
         </div>
 
@@ -347,6 +372,11 @@ export default function AdminTeachers() {
           </section>
         </form>
       </Modal>
+      <TemporaryCredentialsModal
+        credentials={temporaryCredentials}
+        onClose={() => setTemporaryCredentials(null)}
+        subject="O‘qituvchi"
+      />
     </PageEnter>
   )
 }

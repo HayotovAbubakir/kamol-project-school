@@ -113,6 +113,7 @@ export function DialogProvider({ children }) {
   )
 }
 
+// eslint-disable-next-line react-refresh/only-export-components
 export function useDialog() {
   const ctx = useContext(DialogContext)
   if (!ctx) throw new Error('useDialog must be used within DialogProvider')

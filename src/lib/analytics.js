@@ -1,5 +1,5 @@
 import { studentMonthlyFee, studentPaidForMonth, isStudentDebtor, slotTeacherId } from './store'
-import { dateParts, localDateISO } from './utils'
+import { localDateISO } from './utils'
 import { getRuntimeLocale, translate } from '../i18n/runtime'
 
 const MONTH_KEYS = [

@@ -6,7 +6,7 @@ import { PageEnter } from '../../components/motion/PageMotion'
 import { useAuth } from '../../context/AuthContext'
 import { useLanguage } from '../../context/LanguageContext'
 import { updateOwnCredentials } from '../../lib/api'
-import { MIN_PASSWORD_LENGTH, normalizeUsername } from '../../lib/supabase'
+import { MIN_PASSWORD_LENGTH, normalizeUsername } from '../../lib/cloudflare'
 
 export default function OwnerAccountSettings() {
   const { user, setUser } = useAuth()
@@ -20,6 +20,7 @@ export default function OwnerAccountSettings() {
   const [saving, setSaving] = useState(false)
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setUsername(user?.username || '')
   }, [user?.username])
 

@@ -1,34 +1,44 @@
+import { lazy, Suspense } from 'react'
 import { Navigate, Route, Routes } from 'react-router-dom'
 import AuthGuard from './components/AuthGuard'
 import AppShell from './components/AppShell'
+import PasswordResetGate from './components/PasswordResetGate'
 import { AuthProvider } from './context/AuthContext'
 import { DataProvider } from './context/DataContext'
 import { NotificationProvider } from './context/NotificationContext'
-import Login from './pages/Login'
-import AdminGroups from './pages/admin/Groups'
-import AdminStudents from './pages/admin/Students'
-import AdminTeachers from './pages/admin/Teachers'
-import OwnerAccountSettings from './pages/owner/AccountSettings'
-import OwnerDashboard from './pages/owner/Dashboard'
-import OwnerDebtors from './pages/owner/Debtors'
-import OwnerFinance from './pages/owner/Finance'
-import OwnerNotifications from './pages/owner/Notifications'
-import OwnerPaid from './pages/owner/Paid'
-import OwnerRoles from './pages/owner/Roles'
-import OwnerSchedule from './pages/owner/Schedule'
-import OwnerUsers from './pages/owner/Users'
-import TodayAbsent from './pages/owner/TodayAbsent'
-import AppearanceSettings from './pages/settings/Appearance'
-import TeacherDashboard from './pages/teacher/Dashboard'
-import TeacherGroups from './pages/teacher/Groups'
-import TeacherAttendance from './pages/teacher/Attendance'
-import TeacherSchedule from './pages/teacher/Schedule'
+
+const Login = lazy(() => import('./pages/Login'))
+const AdminGroups = lazy(() => import('./pages/admin/Groups'))
+const AdminStudents = lazy(() => import('./pages/admin/Students'))
+const AdminTeachers = lazy(() => import('./pages/admin/Teachers'))
+const OwnerAccountSettings = lazy(() => import('./pages/owner/AccountSettings'))
+const OwnerDashboard = lazy(() => import('./pages/owner/Dashboard'))
+const OwnerDebtors = lazy(() => import('./pages/owner/Debtors'))
+const OwnerFinance = lazy(() => import('./pages/owner/Finance'))
+const OwnerNotifications = lazy(() => import('./pages/owner/Notifications'))
+const OwnerPaid = lazy(() => import('./pages/owner/Paid'))
+const OwnerRoles = lazy(() => import('./pages/owner/Roles'))
+const OwnerSchedule = lazy(() => import('./pages/owner/Schedule'))
+const OwnerUsers = lazy(() => import('./pages/owner/Users'))
+const TodayAbsent = lazy(() => import('./pages/owner/TodayAbsent'))
+const AppearanceSettings = lazy(() => import('./pages/settings/Appearance'))
+const TeacherDashboard = lazy(() => import('./pages/teacher/Dashboard'))
+const TeacherGroups = lazy(() => import('./pages/teacher/Groups'))
+const TeacherAttendance = lazy(() => import('./pages/teacher/Attendance'))
+const TeacherSchedule = lazy(() => import('./pages/teacher/Schedule'))
 
 export default function App() {
   return (
     <AuthProvider>
       <DataProvider>
         <NotificationProvider>
+        <PasswordResetGate />
+        <Suspense fallback={(
+          <div className="app-loader" role="status" aria-live="polite">
+            <div className="app-loader-spinner" aria-hidden="true" />
+            <p className="app-loader-label">Yuklanmoqda…</p>
+          </div>
+        )}>
         <Routes>
           <Route path="/login" element={<Login />} />
 
@@ -91,6 +101,7 @@ export default function App() {
           <Route path="/" element={<Navigate to="/login" replace />} />
           <Route path="*" element={<Navigate to="/login" replace />} />
         </Routes>
+        </Suspense>
         </NotificationProvider>
       </DataProvider>
     </AuthProvider>

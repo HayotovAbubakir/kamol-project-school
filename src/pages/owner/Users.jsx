@@ -1,6 +1,7 @@
-import { Plus, Shield, Trash2 } from 'lucide-react'
+import { KeyRound, Plus, Shield, Trash2 } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { PageEnter } from '../../components/motion/PageMotion'
+import TemporaryCredentialsModal from '../../components/TemporaryCredentialsModal'
 import {
   Avatar,
   GlowButton,
@@ -13,10 +14,13 @@ import {
 } from '../../components/ui'
 import { useData } from '../../context/DataContext'
 import { useLanguage } from '../../context/LanguageContext'
-import { MIN_PASSWORD_LENGTH } from '../../lib/supabase'
+import { MIN_PASSWORD_LENGTH } from '../../lib/cloudflare'
+import { resetUserCredentials } from '../../lib/api'
+import { useDialog } from '../../context/DialogContext'
 
 export default function OwnerUsers() {
   const { data, addAdminUser, removeAdminUser } = useData()
+  const { alert } = useDialog()
   const { t } = useLanguage()
   const admins = useMemo(() => data.users.filter((u) => u.role === 'admin'), [data.users])
   const [selectedId, setSelectedId] = useState(null)
@@ -24,8 +28,22 @@ export default function OwnerUsers() {
   const [adminForm, setAdminForm] = useState({ name: '', username: '', password: '' })
   const [error, setError] = useState('')
   const [saving, setSaving] = useState(false)
+  const [resettingPassword, setResettingPassword] = useState(false)
+  const [temporaryCredentials, setTemporaryCredentials] = useState(null)
 
   const selected = admins.find((a) => a.id === selectedId) ?? null
+
+  const resetAdminPassword = async () => {
+    if (!selected || resettingPassword) return
+    setResettingPassword(true)
+    try {
+      setTemporaryCredentials(await resetUserCredentials(selected))
+    } catch (resetError) {
+      await alert({ message: resetError.message || 'Vaqtinchalik parolni o‘rnatib bo‘lmadi.', tone: 'danger' })
+    } finally {
+      setResettingPassword(false)
+    }
+  }
 
   const submitAdmin = async (e) => {
     e.preventDefault()
@@ -72,6 +90,13 @@ export default function OwnerUsers() {
           <div className="detail-meta-item"><span>{t('common.login')}</span><strong>{selected.username}</strong></div>
           <div className="detail-meta-item"><span>{t('owner.users.role')}</span><strong>{t('role.admin')}</strong></div>
         </div>
+        <GlowButton
+          className="btn-outline btn-sm"
+          onClick={resetAdminPassword}
+          disabled={resettingPassword}
+        >
+          <KeyRound size={14} /> {resettingPassword ? 'Tayyorlanmoqda…' : 'Vaqtinchalik parol'}
+        </GlowButton>
         <GlowButton
           className="btn-danger btn-sm"
           onClick={async () => {
@@ -165,6 +190,11 @@ export default function OwnerUsers() {
           </div>
         </form>
       </Modal>
+      <TemporaryCredentialsModal
+        credentials={temporaryCredentials}
+        onClose={() => setTemporaryCredentials(null)}
+        subject="Admin"
+      />
     </PageEnter>
   )
 }

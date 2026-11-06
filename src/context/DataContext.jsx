@@ -20,6 +20,8 @@ const emptyData = {
 export function DataProvider({ children }) {
   const { user, ready: authReady, configError } = useAuth()
   const userId = user?.id ?? null
+  const userRole = user?.role ?? null
+  const mustResetPassword = Boolean(user?.mustResetPassword)
   const [data, setData] = useState(emptyData)
   const [loading, setLoading] = useState(false)
   const [initialized, setInitialized] = useState(false)
@@ -27,7 +29,7 @@ export function DataProvider({ children }) {
   const loadedForUser = useRef(null)
 
   const refresh = useCallback(async ({ soft = false } = {}) => {
-    if (!userId) {
+    if (!userId || mustResetPassword) {
       setData(emptyData)
       setInitialized(true)
       loadedForUser.current = null
@@ -38,7 +40,7 @@ export function DataProvider({ children }) {
     if (!soft) setLoading(true)
     setError(null)
     try {
-      const next = await api.loadAll()
+      const next = await api.loadAll(userRole)
       setData(next)
       loadedForUser.current = userId
     } catch (err) {
@@ -47,12 +49,21 @@ export function DataProvider({ children }) {
       setLoading(false)
       setInitialized(true)
     }
-  }, [userId])
+  }, [userId, userRole, mustResetPassword])
 
   useEffect(() => {
     if (!authReady || configError) return
 
     if (!userId) {
+      // These resets prevent one user's cached records from flashing on the next session.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setData(emptyData)
+      setInitialized(true)
+      loadedForUser.current = null
+      return
+    }
+
+    if (mustResetPassword) {
       setData(emptyData)
       setInitialized(true)
       loadedForUser.current = null
@@ -64,7 +75,7 @@ export function DataProvider({ children }) {
 
     setInitialized(false)
     refresh({ soft: false })
-  }, [authReady, configError, userId, refresh])
+  }, [authReady, configError, mustResetPassword, userId, refresh])
 
   const run = useCallback(
     async (fn) => {

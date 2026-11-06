@@ -11,7 +11,7 @@ import {
   Users,
 } from 'lucide-react'
 import { addStudent } from '../lib/api.js'
-import { isSupabaseConfigured, supabase, usernameToEmailCandidates } from '../lib/supabase.js'
+import { cloudflare, isBackendConfigured, usernameToEmailCandidates } from '../lib/cloudflare.js'
 import {
   createHomework,
   fetchProfile,
@@ -110,6 +110,8 @@ export default function MainApp() {
   const [notice, setNotice] = useState('')
   const [login, setLogin] = useState('')
   const [password, setPassword] = useState('')
+  const [resetPassword, setResetPassword] = useState('')
+  const [resetConfirmation, setResetConfirmation] = useState('')
   const [busy, setBusy] = useState(false)
   const [createForm, setCreateForm] = useState({ groupId: '', title: '', description: '', deadline: '', file: null })
   const [submissionForm, setSubmissionForm] = useState({ text: '', file: null })
@@ -152,18 +154,19 @@ export default function MainApp() {
   }, [])
 
   useEffect(() => {
-    if (!supabase) return
+    if (!cloudflare) return
     let active = true
-    supabase.auth.getSession().then(async ({ data }) => {
+    cloudflare.auth.getSession().then(async ({ data }) => {
       if (!data.session?.user) return
       try {
         const profile = await fetchProfile(data.session.user.id)
         if (active) {
-          setUser(profile)
-          await refresh(profile)
+          const nextProfile = { ...profile, mustResetPassword: Boolean(data.session.user.must_reset_password) }
+          setUser(nextProfile)
+          if (!nextProfile.mustResetPassword) await refresh(nextProfile)
         }
       } catch {
-        await supabase.auth.signOut({ scope: 'local' })
+        await cloudflare.auth.signOut({ scope: 'local' })
       }
     })
     return () => { active = false }
@@ -192,8 +195,8 @@ export default function MainApp() {
 
   async function handleLogin(event) {
     event.preventDefault()
-    if (!isSupabaseConfigured || !supabase) {
-      setError('Supabase manzili yoki public key sozlanmagan.')
+    if (!isBackendConfigured || !cloudflare) {
+      setError('Cloudflare API sozlanmagan.')
       return
     }
     setBusy(true)
@@ -202,7 +205,7 @@ export default function MainApp() {
       let authUser = null
       let lastError = null
       for (const email of usernameToEmailCandidates(login)) {
-        const result = await supabase.auth.signInWithPassword({ email, password })
+        const result = await cloudflare.auth.signInWithPassword({ email, password })
         if (!result.error && result.data.user) {
           authUser = result.data.user
           break
@@ -211,12 +214,13 @@ export default function MainApp() {
       }
       if (!authUser) throw lastError || new Error('Login yoki parol noto‘g‘ri.')
       const profile = await fetchProfile(authUser.id)
-      setUser(profile)
-      await refresh(profile)
+      const nextProfile = { ...profile, mustResetPassword: Boolean(authUser.must_reset_password) }
+      setUser(nextProfile)
+      if (!nextProfile.mustResetPassword) await refresh(nextProfile)
       setPage('dashboard')
       setPassword('')
     } catch (loginError) {
-      await supabase.auth.signOut({ scope: 'local' })
+      await cloudflare.auth.signOut({ scope: 'local' })
       setError(/invalid login|invalid credentials/i.test(loginError.message)
         ? 'Login yoki parol noto‘g‘ri.'
         : loginError.message || 'Tizimga kirishda xatolik.')
@@ -226,11 +230,37 @@ export default function MainApp() {
   }
 
   async function logout() {
-    await supabase?.auth.signOut({ scope: 'local' })
+    await cloudflare.auth.signOut({ scope: 'local' })
     setUser(null)
     setHomeworks([])
     setPage('dashboard')
     setError('')
+  }
+
+  async function resetTemporaryPassword(event) {
+    event.preventDefault()
+    setError('')
+    if (resetPassword.length < 8) {
+      setError('Yangi parol kamida 8 ta belgidan iborat bo‘lsin.')
+      return
+    }
+    if (resetPassword !== resetConfirmation) {
+      setError('Parollar mos kelmadi.')
+      return
+    }
+    setBusy(true)
+    const result = await cloudflare.auth.updateUser({ password: resetPassword })
+    if (result.error) {
+      setError(result.error.message)
+      setBusy(false)
+      return
+    }
+    const nextProfile = { ...user, mustResetPassword: false }
+    setUser(nextProfile)
+    setResetPassword('')
+    setResetConfirmation('')
+    setBusy(false)
+    await refresh(nextProfile)
   }
 
   async function saveHomework(event) {
@@ -328,6 +358,38 @@ export default function MainApp() {
           <p className="mt-4 text-center text-xs text-[var(--mini-muted)]">
             Login va parolni o‘quv markazi xodimidan oling.
           </p>
+        </div>
+      </main>
+    )
+  }
+
+  if (user.mustResetPassword) {
+    return (
+      <main className="miniapp min-h-[100svh] px-4 py-10 text-[var(--mini-text)]">
+        <div className="mx-auto max-w-sm">
+          <Panel>
+            <h1 className="text-xl font-extrabold">Yangi parol o‘rnating</h1>
+            <p className="mt-2 text-sm text-[var(--mini-muted)]">
+              Vaqtinchalik parol bilan kirdingiz. Davom etish uchun yangi parol tanlang.
+            </p>
+            <form className="mt-4 grid gap-3" onSubmit={resetTemporaryPassword}>
+              <label className="mini-field">
+                <span>Yangi parol</span>
+                <input type="password" autoComplete="new-password" minLength={8} maxLength={128}
+                  value={resetPassword} onChange={(event) => setResetPassword(event.target.value)} required />
+              </label>
+              <label className="mini-field">
+                <span>Parolni takrorlang</span>
+                <input type="password" autoComplete="new-password" minLength={8} maxLength={128}
+                  value={resetConfirmation} onChange={(event) => setResetConfirmation(event.target.value)} required />
+              </label>
+              {error && <p role="alert" className="mini-error">{error}</p>}
+              <ActionButton type="submit" className="w-full" disabled={busy}>
+                {busy ? 'Saqlanmoqda…' : 'Parolni saqlash'}
+              </ActionButton>
+              <ActionButton onClick={logout} className="w-full">Chiqish</ActionButton>
+            </form>
+          </Panel>
         </div>
       </main>
     )
