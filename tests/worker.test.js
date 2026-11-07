@@ -615,8 +615,17 @@ describe('D1 worker routes and authentication', () => {
 
     await env.DB.prepare('INSERT INTO groups (id, name, teacher_id) VALUES (?, ?, ?)')
       .bind('telegram-group', 'Student Group', 'teacher-one').run()
+    await env.DB.prepare('UPDATE groups SET schedule = ? WHERE id = ?')
+      .bind(JSON.stringify([{ day: 0, startTime: '09:00', endTime: '10:00', teacherId: 'teacher-one' }]), 'telegram-group').run()
     await env.DB.prepare('INSERT INTO group_students (group_id, student_id) VALUES (?, ?)')
       .bind('telegram-group', 'telegram-student').run()
+    const studentSchedule = await request('/api/miniapp/student/overview', { token: miniAppSession.session.access_token })
+    expect((await studentSchedule.json()).data.groups).toEqual([
+      expect.objectContaining({
+        id: 'telegram-group',
+        schedule: [{ day: 0, startTime: '09:00', endTime: '10:00', teacherId: 'teacher-one' }],
+      }),
+    ])
     const homeworkId = '00000000-0000-4000-8000-000000000001'
     await env.DB.prepare('INSERT INTO homework (id, group_id, teacher_id, title) VALUES (?, ?, ?, ?)')
       .bind(homeworkId, 'telegram-group', 'teacher-one', 'Test homework').run()

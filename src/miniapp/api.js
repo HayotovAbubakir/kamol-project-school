@@ -100,10 +100,14 @@ export async function loadGroups(profile) {
   const columns = profile?.role === 'teacher'
     ? 'id, name, teacher_id, schedule'
     : 'id, name, teacher_id, monthly_fee, schedule'
-  return unwrap(await cloudflare.from('groups')
+  const rows = unwrap(await cloudflare.from('groups')
     .select(columns)
     .order('name')
     .limit(500))
+  return rows.map((group) => ({
+    ...group,
+    schedule: Array.isArray(group.schedule) ? group.schedule : JSON.parse(group.schedule || '[]'),
+  }))
 }
 
 export async function createHomework(profile, input) {

@@ -1,18 +1,24 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   ArrowLeft,
+  Bell,
   BookOpen,
   CalendarDays,
+  CalendarCheck,
   Check,
-  CheckCircle2,
   ClipboardCheck,
+  CreditCard,
+  Ellipsis,
+  GraduationCap,
+  Home,
   LogOut,
   Mic,
   MessageCircle,
   Plus,
-  Receipt,
   RefreshCw,
   Square,
+  UserRound,
+  UserCog,
   Users,
   Wallet,
 } from 'lucide-react'
@@ -32,6 +38,7 @@ import {
   teachers as teacherData,
   telegram,
 } from '../lib/data/index.js'
+import { Avatar, Button as UiButton, Card as UiCard, ConfirmDialog, EmptyState, Skeleton, Toast } from './ui.jsx'
 import { parseParentPhones } from '../lib/phone.js'
 import { loginBaseFromName } from '../../shared/account-credentials.js'
 import { canAccessEndpoint, canAccessPage } from '../../shared/role-permissions.js'
@@ -61,9 +68,9 @@ const monthLabels = [
 ]
 
 const homeworkEventLabels = {
-  draft_created: 'Draft yaratildi',
+  draft_created: 'Qoralama yaratildi',
   file_added: 'Fayl yoki matn qo‘shildi',
-  proof_added: 'Proof qo‘shildi',
+  proof_added: 'Tasdiq yozuvi qo‘shildi',
   submitted: 'Yuborildi',
   student_done: 'O‘quvchi “Bajardim” deb belgiladi',
   student_not_done: 'O‘quvchi “Bajarolmadim” deb belgiladi',
@@ -71,19 +78,55 @@ const homeworkEventLabels = {
   teacher_not_done: 'O‘qituvchi “Bajarmadi” deb baholadi',
   comment: 'Izoh qo‘shildi',
   resubmitted: 'Qayta topshirish boshlandi',
-  expired: 'Draft muddati tugadi',
+  expired: 'Qoralama muddati tugadi',
 }
 
-const navItems = [
-  { id: 'dashboard', label: 'Bosh sahifa', icon: BookOpen },
-  { id: 'homework', label: 'Uy vazifalari', icon: ClipboardCheck },
-  { id: 'payments', label: 'To‘lovlar', icon: Receipt },
-  { id: 'attendance', label: 'Davomat', icon: CalendarDays },
-  { id: 'management', label: 'Boshqaruv', icon: Users, staff: true },
-  { id: 'reports', label: 'Hisobotlar', icon: CheckCircle2, staff: true },
-  { id: 'finance', label: 'Moliya', icon: Wallet, owner: true },
-  { id: 'questions', label: 'Savollar', icon: MessageCircle, questions: true },
-]
+const roleNavItems = {
+  student: [
+    { id: 'dashboard', label: 'Bosh sahifa', icon: Home },
+    { id: 'homework', label: 'Vazifalar', icon: ClipboardCheck },
+    { id: 'attendance', label: 'Jadval', icon: CalendarDays },
+    { id: 'questions', label: 'Savol', icon: MessageCircle },
+    { id: 'profile', label: 'Profil', icon: UserRound },
+  ],
+  teacher: [
+    { id: 'dashboard', label: 'Bosh sahifa', icon: Home },
+    { id: 'groups', label: 'Guruhlar', icon: Users },
+    { id: 'homework', label: 'Vazifalar', icon: ClipboardCheck },
+    { id: 'attendance', label: 'Davomat', icon: CalendarCheck },
+    { id: 'profile', label: 'Profil', icon: UserRound },
+  ],
+  reception: [
+    { id: 'dashboard', label: 'Bosh sahifa', icon: Home },
+    { id: 'management', label: 'O‘quvchilar', icon: GraduationCap },
+    { id: 'groups', label: 'Guruhlar', icon: Users },
+    { id: 'payments', label: 'To‘lovlar', icon: CreditCard },
+    { id: 'questions', label: 'Savollar', icon: MessageCircle },
+  ],
+  owner: [
+    { id: 'dashboard', label: 'Bosh sahifa', icon: Home },
+    { id: 'management', label: 'O‘quvchilar', icon: GraduationCap },
+    { id: 'groups', label: 'Guruhlar', icon: Users },
+    { id: 'staff', label: 'Xodimlar', icon: UserCog },
+    { id: 'finance', label: 'Moliya', icon: Wallet },
+  ],
+}
+
+const pageTitles = {
+  dashboard: 'Bosh sahifa',
+  homework: 'Vazifalar',
+  payments: 'To‘lovlar',
+  attendance: 'Davomat',
+  management: 'O‘quvchilar',
+  groups: 'Guruhlar',
+  staff: 'Xodimlar',
+  reports: 'Hisobotlar',
+  finance: 'Moliya',
+  questions: 'Savollar',
+  detail: 'Vazifa tafsilotlari',
+  profile: 'Profil',
+  settings: 'Sozlamalar',
+}
 
 function isStaff(role) {
   return canAccessPage(role, 'students') && canAccessPage(role, 'groups')
@@ -94,8 +137,9 @@ function formatDeadline(value) {
   const date = new Date(value)
   if (Number.isNaN(date.getTime())) return value
   return new Intl.DateTimeFormat('uz-UZ', {
-    day: 'numeric',
-    month: 'long',
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
     hour: '2-digit',
     minute: '2-digit',
     timeZone: 'Asia/Tashkent',
@@ -146,7 +190,7 @@ function formatDate(value) {
 }
 
 function Panel({ children, className = '' }) {
-  return <section className={`mini-panel rounded-3xl border p-4 ${className}`}>{children}</section>
+  return <UiCard className={className}>{children}</UiCard>
 }
 
 function SubmissionFile({ file }) {
@@ -193,20 +237,10 @@ function SubmissionFile({ file }) {
 }
 
 function ActionButton({ children, className = '', ...props }) {
-  const { onClick, type, ...buttonProps } = props
-  const handleClick = (event) => {
-    window.Telegram?.WebApp?.HapticFeedback?.impactOccurred?.('light')
-    onClick?.(event)
-  }
   return (
-    <button
-      type={type || 'button'}
-      className={`mini-action flex min-h-11 items-center justify-center gap-2 rounded-2xl px-4 text-sm font-bold transition disabled:cursor-not-allowed disabled:opacity-50 ${className}`}
-      {...buttonProps}
-      onClick={handleClick}
-    >
+    <UiButton className={className} {...props}>
       {children}
-    </button>
+    </UiButton>
   )
 }
 
@@ -215,9 +249,9 @@ function TaskCard({ task, teacher, now, onClick }) {
   const status = task.submission?.status
   const isPastDue = task.due_at && new Date(task.due_at).getTime() < now
   const statusText = task.submission?.state === 'draft'
-    ? 'Draft · proof kutilmoqda'
+    ? 'Qoralama · tasdiq yozuvi kutilmoqda'
     : task.submission?.state === 'expired' && isPastDue ? 'Topshirilmadi'
-      : task.submission?.state === 'expired' ? 'Draft muddati tugagan'
+      : task.submission?.state === 'expired' ? 'Qoralama muddati tugagan'
     : status === 'approved' ? 'Bajardi' : status === 'rejected' ? 'Qayta topshirish kerak'
       : status === 'pending' ? 'Tekshirilmoqda' : isPastDue ? 'Topshirilmadi' : 'Yangi'
 
@@ -250,6 +284,7 @@ export default function MainApp() {
   const [homeworks, setHomeworks] = useState([])
   const [homeworkHistory, setHomeworkHistory] = useState({ events: [], submissions: [] })
   const [groups, setGroups] = useState([])
+  const [studentGroups, setStudentGroups] = useState([])
   const [students, setStudents] = useState([])
   const [teachers, setTeachers] = useState([])
   const [expenses, setExpenses] = useState([])
@@ -262,6 +297,12 @@ export default function MainApp() {
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
   const [studentSearch, setStudentSearch] = useState('')
+  const [studentPage, setStudentPage] = useState(0)
+  const [paymentSearch, setPaymentSearch] = useState('')
+  const [paymentPage, setPaymentPage] = useState(0)
+  const [moreOpen, setMoreOpen] = useState(false)
+  const [keyboardOpen, setKeyboardOpen] = useState(false)
+  const [confirmDialog, setConfirmDialog] = useState(null)
   const [authLoading, setAuthLoading] = useState(true)
   const [telegramLoginRequired, setTelegramLoginRequired] = useState(false)
   const [telegramLoginForm, setTelegramLoginForm] = useState({ username: '', password: '' })
@@ -302,6 +343,7 @@ export default function MainApp() {
   const [questionReply, setQuestionReply] = useState({})
   const [copied, setCopied] = useState(false)
   const touchStartY = useRef(null)
+  const pageHistory = useRef([])
   const reviewLinkHandled = useRef(false)
   const mediaRecorder = useRef(null)
   const recordingStream = useRef(null)
@@ -328,6 +370,49 @@ export default function MainApp() {
   const thisMonthSubmissions = homeworks.filter((task) => (
     task.submission?.submitted_at && new Date(task.submission.submitted_at) >= monthStart
   ))
+  const scheduleEntries = studentGroups.flatMap((group) => (group.schedule || []).map((slot) => ({
+    ...slot,
+    groupId: group.id,
+    groupName: group.name,
+  })))
+  const weekdayIndex = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].indexOf(
+    new Intl.DateTimeFormat('en-US', { weekday: 'short', timeZone: 'Asia/Tashkent' }).format(new Date()),
+  )
+  const [currentHour, currentMinute] = new Intl.DateTimeFormat('en-GB', {
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23',
+    timeZone: 'Asia/Tashkent',
+  }).format(new Date()).split(':').map(Number)
+  const currentMinutes = currentHour * 60 + currentMinute
+  const nextLesson = scheduleEntries
+    .map((item) => {
+      const [hour, minute] = String(item.startTime || '00:00').split(':').map(Number)
+      const startMinutes = hour * 60 + minute
+      let dayDistance = (Number(item.day) - weekdayIndex + 7) % 7
+      if (dayDistance === 0 && startMinutes < currentMinutes) dayDistance = 7
+      return { ...item, dayDistance, startMinutes }
+    })
+    .sort((left, right) => left.dayDistance - right.dayDistance || left.startMinutes - right.startMinutes)[0]
+  const [currentYear, currentMonth] = tashkentDateRange().to.slice(0, 7).split('-').map(Number)
+  const currentMonthPayments = payments.filter((item) => Number(item.month) === currentMonth && Number(item.year) === currentYear)
+  const debtorCount = students.filter((person) => Number(person.monthly_fee || 0) > 0
+    && !currentMonthPayments.some((payment) => payment.student_id === person.id)).length
+  const todayLessonCount = groups.reduce((count, group) => count + (group.schedule || []).filter((slot) => Number(slot.day) === weekdayIndex).length, 0)
+  const filteredStudents = students.filter((item) => `${item.name} ${item.phone} ${item.login || ''}`.toLowerCase().includes(studentSearch.toLowerCase()))
+  const visibleStudents = filteredStudents.slice(studentPage * 20, (studentPage + 1) * 20)
+  const filteredPayments = payments.filter((item) => `${item.student_name || ''} ${item.amount || ''} ${item.month || ''}.${item.year || ''}`.toLowerCase().includes(paymentSearch.toLowerCase()))
+  const visiblePayments = filteredPayments.slice(paymentPage * 20, (paymentPage + 1) * 20)
+  const notificationCount = student
+    ? homeworks.filter((task) => !task.submission).length
+    : teacher
+      ? homeworks.reduce((sum, task) => sum + (task.submissions || []).filter((item) => item.status === 'pending').length, 0)
+      : questionTickets.reduce((sum, ticket) => sum + Number(ticket.unread_count || 0), 0)
+  const goBack = useCallback(() => {
+    const previousPage = pageHistory.current.pop()
+    setPage(previousPage || (page === 'detail' ? 'homework' : 'dashboard'))
+    setMoreOpen(false)
+  }, [page])
 
   const refresh = useCallback(async (profile) => {
     if (!profile) return
@@ -345,6 +430,7 @@ export default function MainApp() {
         tasks = overview.homeworks
         paymentRows = overview.payments
         attendanceRows = overview.attendance
+        setStudentGroups(overview.groups || [])
       } else {
         tasks = await homeworkData.list(profile)
         const staffDataRows = await Promise.all([
@@ -502,9 +588,15 @@ export default function MainApp() {
   useEffect(() => {
     const app = window.Telegram?.WebApp
     if (!app || !app.isVersionAtLeast?.('6.1')) return undefined
-    const onBack = () => setPage('dashboard')
+    const onBack = () => goBack()
     const formId = page === 'management'
       ? editingGroupId ? 'mini-group-form' : editingTeacherId ? 'mini-teacher-form' : 'mini-student-form'
+      : page === 'homework' && teacher && selectedId === 'new'
+        ? 'mini-homework-form'
+        : page === 'questions' && student
+          ? 'mini-question-form'
+          : page === 'attendance' && (teacher || privileged)
+            ? 'mini-attendance-form'
       : page === 'detail' && student && selectedHomework
         && !selectedHomeworkSubmissionLocked
         ? 'mini-submission-form'
@@ -517,10 +609,19 @@ export default function MainApp() {
     }
 
     if (formId) {
-      app.MainButton?.setText(page === 'management'
+      const mainButtonText = page === 'management'
         ? editingGroupId ? 'Guruhni saqlash' : editingTeacherId ? 'O‘qituvchini saqlash' : editingStudentId ? 'O‘quvchini saqlash' : 'O‘quvchini yaratish'
-        : 'Vazifani topshirish')
+        : page === 'homework' ? 'Vazifani yuborish'
+          : page === 'questions' ? 'Savol yuborish'
+            : page === 'attendance' ? 'Davomatni saqlash'
+              : 'Vazifani topshirish'
+      app.MainButton?.setText(mainButtonText)
       app.MainButton?.show()
+      if (busy) app.MainButton?.showProgress?.()
+      else {
+        app.MainButton?.hideProgress?.()
+        app.MainButton?.enable?.()
+      }
       app.MainButton?.onClick(onMainClick)
     } else app.MainButton?.hide()
 
@@ -529,7 +630,7 @@ export default function MainApp() {
       app.MainButton?.offClick(onMainClick)
       app.MainButton?.hide()
     }
-  }, [page, student, selectedHomework, selectedHomeworkSubmissionLocked, editingStudentId, editingTeacherId, editingGroupId])
+  }, [page, student, selectedHomework, selectedHomeworkSubmissionLocked, editingStudentId, editingTeacherId, editingGroupId, teacher, privileged, selectedId, goBack, busy])
 
   useEffect(() => {
     if (!user) return undefined
@@ -540,30 +641,27 @@ export default function MainApp() {
     return () => document.removeEventListener('visibilitychange', onVisible)
   }, [refresh, user])
 
-  const visibleNav = useMemo(
-    () => navItems.filter((item) => (!item.staff || privileged)
-      && (!item.owner || canAccessPage(role, 'finance'))
-      && (!item.questions || canAccessPage(role, 'questions'))),
-    [privileged, role],
-  )
+  const visibleNav = roleNavItems[role] || []
 
   const refreshQuestions = useCallback(async () => {
     try {
       setError('')
-      setQuestionTickets(await listQuestionTickets(questionStatus, questionSearch))
+      const onDashboard = page === 'dashboard'
+      setQuestionTickets(await listQuestionTickets(onDashboard ? 'open' : questionStatus, onDashboard ? '' : questionSearch))
     } catch (loadError) {
       setError(loadError.message || 'Savollarni yuklab bo‘lmadi.')
     }
-  }, [questionStatus, questionSearch])
+  }, [page, questionStatus, questionSearch])
 
   useEffect(() => {
-    if (page === 'questions' && user) queueMicrotask(() => refreshQuestions())
-  }, [page, user, refreshQuestions])
+    if ((page === 'questions' || (page === 'dashboard' && privileged)) && user) queueMicrotask(() => refreshQuestions())
+  }, [page, user, privileged, refreshQuestions])
 
   async function logout() {
     await auth.signOut()
     setUser(null)
     setHomeworks([])
+    setStudentGroups([])
     setPage('dashboard')
     setError('')
   }
@@ -609,8 +707,8 @@ export default function MainApp() {
       setSubmissionBotLink(await fetchHomeworkBotLink(selectedHomework.id))
       setSubmissionForm({ text: '', files: [] })
       setNotice(recordedProof
-        ? 'Draft va ovozli proof saqlandi. Botda “Yuborish”ni tasdiqlang.'
-        : 'Draft saqlandi. Dumaloq video yoki golos xabar yuborib, botda “Yuborish”ni tasdiqlang.')
+        ? 'Qoralama va ovozli tasdiq yozuvi saqlandi. Bot orqali “Yuborish”ni tasdiqlang.'
+        : 'Qoralama saqlandi. Dumaloq video yoki ovozli xabar yuborib, bot orqali “Yuborish”ni tasdiqlang.')
       await refresh(user)
     } catch (submitError) {
       setError(submitError.message || 'Vazifani topshirib bo‘lmadi.')
@@ -636,7 +734,7 @@ export default function MainApp() {
       return
     }
     if (typeof window.MediaRecorder !== 'function' || !navigator.mediaDevices?.getUserMedia) {
-      setError('Bu qurilmada ilova ichida ovoz yozib bo‘lmaydi. Telegram bot orqali proof yuboring.')
+      setError('Bu qurilmada ilova ichida ovoz yozib bo‘lmaydi. Telegram bot orqali tasdiq yozuvini yuboring.')
       return
     }
     try {
@@ -656,12 +754,12 @@ export default function MainApp() {
         mediaRecorder.current = null
         const duration = Math.floor((Date.now() - recordingStartedAt.current) / 1000)
         if (duration < 3) {
-          setError('Ovozli proof kamida 3 soniya bo‘lishi kerak.')
+          setError('Ovozli tasdiq yozuvi kamida 3 soniya bo‘lishi kerak.')
           return
         }
         setRecordedProof(new Blob(recordingChunks.current, { type: recorder.mimeType || 'audio/webm' }))
         setRecordedProofDuration(duration)
-        setNotice(`Ovozli proof yozildi (${duration} soniya). Draftni saqlang.`)
+        setNotice(`Ovozli tasdiq yozildi (${duration} soniya). Qoralamani saqlang.`)
       }
       mediaRecorder.current = recorder
       recorder.start()
@@ -669,7 +767,7 @@ export default function MainApp() {
     } catch (recordError) {
       recordingStream.current?.getTracks().forEach((track) => track.stop())
       recordingStream.current = null
-      setError(recordError.message || 'Mikrofonga ruxsat berilmadi. Telegram bot orqali proof yuboring.')
+      setError(recordError.message || 'Mikrofonga ruxsat berilmadi. Telegram bot orqali tasdiq yozuvini yuboring.')
     }
   }
 
@@ -835,6 +933,14 @@ export default function MainApp() {
     }
   }
 
+  function confirmUnlinkStudent(item) {
+    setConfirmDialog({
+      title: 'Telegram akkauntini uzish',
+      description: `${item.name} o‘quvchisining Telegram akkauntini uzmoqchimisiz?`,
+      onConfirm: () => unlinkStudent(item),
+    })
+  }
+
   async function saveTeacher(event) {
     event.preventDefault()
     setBusy(true)
@@ -933,6 +1039,18 @@ export default function MainApp() {
     }
   }
 
+  function requestStaffStatusChange(item) {
+    if (!item.is_active) {
+      toggleStaffActive(item)
+      return
+    }
+    setConfirmDialog({
+      title: 'Xodim akkauntini faolsizlantirish',
+      description: `${item.name} akkauntiga kirishni to‘xtatmoqchimisiz?`,
+      onConfirm: () => toggleStaffActive(item),
+    })
+  }
+
   async function saveGroup(event) {
     event.preventDefault()
     setBusy(true)
@@ -1020,7 +1138,6 @@ export default function MainApp() {
   }
 
   async function removeTeacher(item) {
-    if (!window.confirm(`${item.name} o‘qituvchisini o‘chirmoqchimisiz?`)) return
     setBusy(true)
     setError('')
     try {
@@ -1035,8 +1152,15 @@ export default function MainApp() {
     }
   }
 
+  function confirmRemoveTeacher(item) {
+    setConfirmDialog({
+      title: 'O‘qituvchini o‘chirish',
+      description: `${item.name} o‘qituvchisini o‘chirmoqchimisiz?`,
+      onConfirm: () => removeTeacher(item),
+    })
+  }
+
   async function removeGroup(item) {
-    if (!window.confirm(`${item.name} guruhini o‘chirmoqchimisiz?`)) return
     setBusy(true)
     setError('')
     try {
@@ -1049,6 +1173,14 @@ export default function MainApp() {
     } finally {
       setBusy(false)
     }
+  }
+
+  function confirmRemoveGroup(item) {
+    setConfirmDialog({
+      title: 'Guruhni o‘chirish',
+      description: `${item.name} guruhini o‘chirmoqchimisiz?`,
+      onConfirm: () => removeGroup(item),
+    })
   }
 
   async function savePayment(event) {
@@ -1185,60 +1317,119 @@ export default function MainApp() {
     )
   }
 
-  const navTo = (nextPage) => {
+  function navTo(nextPage) {
+    if (nextPage !== page) pageHistory.current.push(page)
     setError('')
     setNotice('')
+    setMoreOpen(false)
     setRevealedStudentPasswords({})
     Object.values(studentPasswordTimers.current).forEach((timer) => window.clearTimeout(timer))
     studentPasswordTimers.current = {}
     setPage(nextPage)
+    window.scrollTo({ top: 0, behavior: 'smooth' })
   }
+
+  const morePages = (role === 'owner'
+    ? ['homework', 'payments', 'attendance', 'reports', 'questions', 'settings']
+    : role === 'reception'
+      ? ['homework', 'attendance', 'reports', 'profile']
+      : role === 'teacher'
+        ? ['payments', 'questions', 'reports', 'profile']
+        : ['payments', 'settings'])
+    .filter((id) => id === 'profile' || id === 'settings'
+      || (id === 'payments' && student)
+      || canAccessPage(role, id))
 
   return (
     <main
-      className="miniapp min-h-[100svh] px-4 pb-[max(2rem,env(safe-area-inset-bottom))] pt-[max(1rem,env(safe-area-inset-top))] text-[var(--mini-text)]"
-      onTouchStart={(event) => { touchStartY.current = window.scrollY === 0 ? event.touches[0].clientY : null }}
+      className={`miniapp min-h-[100svh] px-4 pb-[calc(4.5rem+env(safe-area-inset-bottom))] pt-[max(1rem,env(safe-area-inset-top))] text-[var(--mini-text)]${keyboardOpen ? ' mini-keyboard-open' : ''}`}
+      onFocusCapture={(event) => {
+        const target = event.target
+        if (!(target instanceof HTMLElement) || !target.matches('input, textarea, select')) return
+        setKeyboardOpen(true)
+        window.setTimeout(() => target.scrollIntoView({ block: 'center', behavior: 'smooth' }), 250)
+      }}
+      onBlurCapture={() => window.setTimeout(() => {
+        const active = document.activeElement
+        setKeyboardOpen(active instanceof HTMLElement && active.matches('input, textarea, select'))
+      }, 100)}
+      onTouchStart={(event) => {
+        const content = event.currentTarget.querySelector('.mini-app-content')
+        touchStartY.current = content?.scrollTop === 0 ? event.touches[0].clientY : null
+      }}
       onTouchEnd={(event) => {
         const start = touchStartY.current
         touchStartY.current = null
-        if (start !== null && event.changedTouches[0].clientY - start > 90 && window.scrollY === 0 && user) refresh(user)
+        const content = event.currentTarget.querySelector('.mini-app-content')
+        if (start !== null && event.changedTouches[0].clientY - start > 90 && content?.scrollTop === 0 && user) refresh(user)
       }}
     >
-      <div className="mx-auto w-full max-w-xl">
-        <header className="flex items-center justify-between gap-3">
+      <div className="mini-app-content mx-auto w-full max-w-xl">
+        <header className="mini-app-bar flex min-h-14 items-center justify-between gap-3">
           <div className="flex min-w-0 items-center gap-3">
             {page !== 'dashboard' && (
-              <button type="button" className="mini-icon-button" aria-label="Ortga" onClick={() => navTo('dashboard')}>
+              <button type="button" className="mini-icon-button" aria-label="Ortga" onClick={goBack}>
                 <ArrowLeft size={18} />
               </button>
             )}
-            <div className="brand-mark grid size-10 shrink-0 place-items-center rounded-2xl font-black">K</div>
             <div className="min-w-0">
-              <p className="truncate text-sm font-bold">Kamol School</p>
+              <h1 className="truncate text-lg font-extrabold">{pageTitles[page] || 'Kamol School'}</h1>
               <p className="truncate text-xs text-[var(--mini-muted)]">{roleLabels[role] || role} · {user.name}</p>
             </div>
           </div>
           <div className="flex items-center gap-2">
+            <button
+              type="button"
+              className="mini-icon-button mini-notification-button"
+              onClick={() => navTo(student || teacher ? 'homework' : canAccessPage(role, 'questions') ? 'questions' : 'management')}
+              aria-label={`Bildirishnomalar${notificationCount ? `, ${notificationCount} ta` : ''}`}
+              title="Bildirishnomalar"
+            >
+              <Bell size={18} />
+              {notificationCount > 0 && <span className="mini-notification-badge">{notificationCount > 9 ? '9+' : notificationCount}</span>}
+            </button>
+            <button type="button" className="mini-icon-button" onClick={() => setMoreOpen((open) => !open)} aria-label="Ko‘proq menyu" aria-expanded={moreOpen}>
+              <Ellipsis size={19} />
+            </button>
             <button type="button" className="mini-icon-button" onClick={() => refresh(user)} aria-label="Yangilash" title="Yangilash" disabled={loading}>
               <RefreshCw size={17} className={loading ? 'animate-spin' : ''} />
-            </button>
-            <button type="button" className="mini-icon-button" onClick={logout} aria-label="Chiqish" title="Chiqish">
-              <LogOut size={17} />
             </button>
           </div>
         </header>
 
-        <nav className="mini-nav mt-5 grid grid-cols-2 gap-1 rounded-2xl p-1 sm:grid-cols-4" aria-label="Asosiy menyu">
-          {visibleNav.map(({ id, label, icon: Icon }) => (
-            <button key={id} type="button" onClick={() => navTo(id)} aria-current={page === id ? 'page' : undefined}>
-              <Icon size={15} /> <span>{label}</span>
-            </button>
-          ))}
-        </nav>
+        {moreOpen && (
+          <div className="mini-more-menu" role="dialog" aria-label="Ko‘proq bo‘limlar">
+            <div className="flex items-center justify-between">
+              <h2 className="font-bold">Ko‘proq</h2>
+              <button className="mini-icon-button" type="button" aria-label="Menyuni yopish" onClick={() => setMoreOpen(false)}>×</button>
+            </div>
+            <div className="mt-2 grid gap-1">
+              {morePages.map((id) => (
+                <button key={id} type="button" className="mini-more-item" onClick={() => navTo(id)}>
+                  <span>{pageTitles[id]}</span><ArrowLeft className="rotate-180" size={16} />
+                </button>
+              ))}
+              <button type="button" className="mini-more-item mini-more-logout" onClick={logout}>
+                <span>Chiqish</span><LogOut size={16} />
+              </button>
+            </div>
+          </div>
+        )}
 
-        {error && <p role="alert" className="mini-error mt-4">{error}</p>}
-        {notice && <p role="status" className="mini-notice mt-4">{notice}</p>}
-        {loading && <p className="mt-4 text-sm text-[var(--mini-muted)]">Ma’lumotlar yuklanmoqda…</p>}
+        {error && (
+          <div className="mt-4">
+            <Toast kind="error">{error}</Toast>
+            <ActionButton
+              className="mini-secondary mt-2"
+              onClick={() => user ? refresh(user) : window.location.reload()}
+              disabled={loading}
+            >
+              Qayta urinish
+            </ActionButton>
+          </div>
+        )}
+        {notice && <Toast>{notice}</Toast>}
+        {loading && <Skeleton rows={2} />}
 
         {page === 'dashboard' && (
           <section className="mt-7">
@@ -1272,6 +1463,12 @@ export default function MainApp() {
               {student && (
                 <>
                   <Panel>
+                    <p className="text-sm text-[var(--mini-muted)]">Keyingi dars</p>
+                    {nextLesson
+                      ? <><p className="mt-2 text-lg font-bold">{nextLesson.groupName}</p><p className="mt-1 text-sm text-[var(--mini-muted)]">{['Dushanba', 'Seshanba', 'Chorshanba', 'Payshanba', 'Juma', 'Shanba', 'Yakshanba'][Number(nextLesson.day)]} · {nextLesson.startTime || 'Vaqt belgilanmagan'}</p></>
+                      : <p className="mt-2 text-sm text-[var(--mini-muted)]">Dars jadvali kiritilmagan.</p>}
+                  </Panel>
+                  <Panel>
                     <p className="text-sm text-[var(--mini-muted)]">So‘nggi to‘lovlar</p>
                     <p className="mt-2 text-2xl font-extrabold">{payments.slice(0, 3).reduce((sum, item) => sum + Number(item.amount || 0), 0).toLocaleString('uz-UZ')} so‘m</p>
                     <p className="mt-1 text-xs text-[var(--mini-muted)]">{payments.length} ta to‘lov · {payments.slice(0, 3).map((item) => `${item.month}.${item.year}`).join(', ') || 'Ma’lumot yo‘q'}</p>
@@ -1292,6 +1489,25 @@ export default function MainApp() {
                   <p className="mt-1 text-xs text-[var(--mini-muted)]">Tushum, ish haqi va xarajatlar</p>
                 </Panel>
               )}
+              {role === 'reception' && (
+                <>
+                  <Panel>
+                    <p className="text-sm text-[var(--mini-muted)]">Yangi savollar</p>
+                    <p className="mt-2 text-3xl font-extrabold">{questionTickets.length}</p>
+                    <ActionButton className="mt-4 w-full" onClick={() => navTo('questions')}>Savollarni ochish</ActionButton>
+                  </Panel>
+                  <Panel>
+                    <p className="text-sm text-[var(--mini-muted)]">Shu oy to‘lov qilmaganlar</p>
+                    <p className="mt-2 text-3xl font-extrabold">{debtorCount}</p>
+                    <ActionButton className="mt-4 w-full" onClick={() => navTo('payments')}>To‘lovlarni ko‘rish</ActionButton>
+                  </Panel>
+                  <Panel>
+                    <p className="text-sm text-[var(--mini-muted)]">Bugungi darslar</p>
+                    <p className="mt-2 text-3xl font-extrabold">{todayLessonCount}</p>
+                    <ActionButton className="mt-4 w-full" onClick={() => navTo('groups')}>Jadvalni ko‘rish</ActionButton>
+                  </Panel>
+                </>
+              )}
               {privileged && (
                 <>
                   <Panel>
@@ -1299,11 +1515,11 @@ export default function MainApp() {
                     <p className="mt-2 text-3xl font-extrabold">{students.length}</p>
                     <ActionButton className="mt-4 w-full" onClick={() => navTo('management')}>Boshqarish</ActionButton>
                   </Panel>
-                  <Panel>
+                  {canAccessPage(role, 'reports') && <Panel>
                     <p className="text-sm text-[var(--mini-muted)]">Oylik hisobotlar</p>
                     <p className="mt-2 text-3xl font-extrabold">{reports.length}</p>
                     <ActionButton className="mt-4 w-full" onClick={() => navTo('reports')}>Hisobotlarni ko‘rish</ActionButton>
-                  </Panel>
+                  </Panel>}
                 </>
               )}
             </div>
@@ -1327,6 +1543,110 @@ export default function MainApp() {
           </section>
         )}
 
+        {page === 'groups' && (
+          <section className="mt-7 grid gap-3">
+            {teacher && (
+              <Panel>
+                <h2 className="font-bold">Guruhlarim</h2>
+                <div className="mt-3 grid gap-2">
+                  {groups.map((group) => (
+                    <div key={group.id} className="rounded-2xl bg-[var(--mini-bg)] p-3">
+                      <p className="font-semibold">{group.name}</p>
+                      <p className="mt-1 text-sm text-[var(--mini-muted)]">
+                        {(group.schedule || []).map((slot) => `${['Dush.', 'Sesh.', 'Chor.', 'Pay.', 'Juma', 'Shan.', 'Yak.'][Number(slot.day)] || ''} ${slot.startTime || ''}${slot.endTime ? `–${slot.endTime}` : ''}`).join(' · ') || 'Dars jadvali kiritilmagan'}
+                      </p>
+                      <p className="mt-1 text-xs text-[var(--mini-muted)]">
+                        {students.filter((item) => item.group_id === group.id || item.groupId === group.id).length} nafar o‘quvchi
+                      </p>
+                    </div>
+                  ))}
+                  {!groups.length && !loading && <p className="text-sm text-[var(--mini-muted)]">Sizga guruh biriktirilmagan.</p>}
+                </div>
+              </Panel>
+            )}
+            {!teacher && (
+              <Panel>
+                <div className="flex items-center justify-between gap-3">
+                  <h2 className="font-bold">Guruhlar ro‘yxati</h2>
+                  {canAccessPage(role, 'groups') && <ActionButton className="mini-secondary" onClick={() => navTo('management')}>Boshqarish</ActionButton>}
+                </div>
+                <div className="mt-3 grid gap-2">
+                  {groups.map((group) => (
+                    <div key={group.id} className="rounded-2xl bg-[var(--mini-bg)] p-3">
+                      <p className="font-semibold">{group.name}</p>
+                      <p className="mt-1 text-sm text-[var(--mini-muted)]">
+                        {teachers.find((item) => item.id === group.teacher_id)?.name || 'O‘qituvchi biriktirilmagan'}
+                      </p>
+                      <p className="mt-1 text-xs text-[var(--mini-muted)]">
+                        {(group.schedule || []).map((slot) => `${['Dush.', 'Sesh.', 'Chor.', 'Pay.', 'Juma', 'Shan.', 'Yak.'][Number(slot.day)] || ''} ${slot.startTime || ''}${slot.endTime ? `–${slot.endTime}` : ''}`).join(' · ') || 'Jadval kiritilmagan'}
+                      </p>
+                    </div>
+                  ))}
+                  {!groups.length && !loading && <p className="text-sm text-[var(--mini-muted)]">Guruhlar hali kiritilmagan.</p>}
+                </div>
+              </Panel>
+            )}
+          </section>
+        )}
+
+        {page === 'staff' && role === 'owner' && (
+          <section className="mt-7 grid gap-3">
+            <Panel>
+              <div className="flex items-center justify-between gap-3">
+                <h2 className="font-bold">Xodimlar</h2>
+                <ActionButton onClick={() => navTo('management')}><Plus size={16} /> Xodim qo‘shish</ActionButton>
+              </div>
+              <div className="mt-3 divide-y divide-[var(--mini-border)]">
+                {staffRows.map((item) => (
+                  <div key={item.id} className="flex min-h-14 items-center justify-between gap-3 py-2">
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-semibold">{item.name}</p>
+                      <p className="text-xs text-[var(--mini-muted)]">{item.role === 'reception' ? 'Qabulxona' : 'O‘qituvchi'} · {item.username}</p>
+                    </div>
+                    <span className={`mini-badge ${item.is_active ? 'mini-badge-success' : 'mini-badge-muted'}`}>
+                      {item.is_active ? 'Faol' : 'Faol emas'}
+                    </span>
+                  </div>
+                ))}
+                {!staffRows.length && !loading && <p className="py-3 text-sm text-[var(--mini-muted)]">Xodimlar ro‘yxati bo‘sh.</p>}
+              </div>
+            </Panel>
+            <Panel>
+              <h2 className="font-bold">O‘qituvchilar</h2>
+              <div className="mt-2 divide-y divide-[var(--mini-border)]">
+                {teachers.map((item) => <p key={item.id} className="py-3 text-sm">{item.name} · {item.phone || 'Telefon yo‘q'}</p>)}
+                {!teachers.length && !loading && <p className="py-3 text-sm text-[var(--mini-muted)]">O‘qituvchilar topilmadi.</p>}
+              </div>
+            </Panel>
+          </section>
+        )}
+
+        {(page === 'profile' || page === 'settings') && (
+          <section className="mt-7 grid gap-3">
+            <Panel>
+              <div className="flex items-center gap-3">
+                <Avatar name={user.name} />
+                <div className="min-w-0">
+                  <h2 className="truncate font-bold">{user.name}</h2>
+                  <p className="text-sm text-[var(--mini-muted)]">{roleLabels[role] || role}</p>
+                </div>
+              </div>
+              <div className="mt-4 grid gap-2 text-sm">
+                {user.username && <p><span className="text-[var(--mini-muted)]">Login: </span>{user.username}</p>}
+                {user.phone && <p><span className="text-[var(--mini-muted)]">Telefon: </span>{user.phone}</p>}
+              </div>
+            </Panel>
+            {student && (
+              <Panel>
+                <h2 className="font-bold">O‘quvchi ma’lumotlari</h2>
+                <button type="button" className="mini-more-item mt-2" onClick={() => navTo('payments')}>To‘lovlarim <ArrowLeft className="rotate-180" size={16} /></button>
+                <button type="button" className="mini-more-item" onClick={() => navTo('attendance')}>Davomatim <ArrowLeft className="rotate-180" size={16} /></button>
+              </Panel>
+            )}
+            <ActionButton className="mini-secondary" onClick={logout}><LogOut size={16} /> Tizimdan chiqish</ActionButton>
+          </section>
+        )}
+
         {page === 'homework' && (
           <section className="mt-7">
             <div className="mb-4 flex items-center justify-between">
@@ -1339,7 +1659,7 @@ export default function MainApp() {
             {teacher && selectedId === 'new' && (
               <Panel className="mb-4">
                 <h2 className="font-bold">Guruhga vazifa berish</h2>
-                <form className="mt-4 grid gap-3" onSubmit={saveHomework}>
+                <form id="mini-homework-form" className="mt-4 grid gap-3" onSubmit={saveHomework}>
                   <label className="mini-field"><span>Guruh</span>
                     <select value={createForm.groupId} onChange={(event) => setCreateForm({ ...createForm, groupId: event.target.value })} required>
                       <option value="">Guruhni tanlang</option>
@@ -1360,10 +1680,10 @@ export default function MainApp() {
             {homeworks.length ? (
               <div className="grid gap-3">
                 {homeworks.map((task) => (
-                  <TaskCard key={task.id} task={task} teacher={teacher} now={now} onClick={() => { setSelectedId(task.id); setPage('detail') }} />
+                  <TaskCard key={task.id} task={task} teacher={teacher} now={now} onClick={() => { setSelectedId(task.id); navTo('detail') }} />
                 ))}
               </div>
-            ) : !loading && <Panel>Hozircha uy vazifalari yo‘q.</Panel>}
+            ) : !loading && <EmptyState title="Hozircha vazifalar yo‘q" description="Yangi vazifalar paydo bo‘lganda shu yerda ko‘rasiz." />}
           </section>
         )}
 
@@ -1376,7 +1696,7 @@ export default function MainApp() {
             {student ? (
               <Panel>
                 <h2 className="font-bold">Savol yuborish</h2>
-                <form className="mt-3 grid gap-3" onSubmit={sendQuestion}>
+                <form id="mini-question-form" className="mt-3 grid gap-3" onSubmit={sendQuestion}>
                   <label className="mini-field"><span>Savolingiz</span><textarea rows="4" maxLength="10000" value={questionText} onChange={(event) => setQuestionText(event.target.value)} required /></label>
                   <label className="mini-field"><span>Fayl yoki ovoz (ixtiyoriy, 20 MB gacha)</span><input type="file" onChange={(event) => setQuestionFile(event.target.files?.[0] || null)} /></label>
                   <ActionButton type="submit" disabled={busy || !questionText.trim()}>{busy ? 'Yuborilmoqda…' : 'Savol yuborish'}</ActionButton>
@@ -1437,14 +1757,14 @@ export default function MainApp() {
                 <h2 className="font-bold">Javobni topshirish</h2>
                 {selectedHomework.submission?.state && (
                   <p className="mt-2 text-sm text-[var(--mini-muted)]">
-                    Holati: {selectedHomework.submission.state === 'draft' ? 'Draft' : selectedHomework.submission.state === 'checked'
+                    Holati: {selectedHomework.submission.state === 'draft' ? 'Qoralama' : selectedHomework.submission.state === 'checked'
                       ? selectedHomework.submission.teacher_result === 'done' ? 'Bajardi' : 'Bajarmadi'
-                      : selectedHomework.submission.state === 'expired' ? 'Draft muddati tugagan' : 'Topshirildi · tekshirilmoqda'}
+                      : selectedHomework.submission.state === 'expired' ? 'Qoralama muddati tugagan' : 'Topshirildi · tekshirilmoqda'}
                   </p>
                 )}
                 {selectedHomework.submission?.state === 'draft'
                   && !selectedHomework.submission?.files?.some((file) => ['voice', 'video_note'].includes(file.kind))
-                  && <p className="mt-2 text-sm font-semibold text-amber-300">Dumaloq video yoki golos xabar yuborilmagan.</p>}
+                  && <p className="mt-2 text-sm font-semibold text-amber-300">Dumaloq video yoki ovozli xabar yuborilmagan.</p>}
                 {selectedHomework.submission?.feedback && <p className="mt-2 text-sm">Izoh: {selectedHomework.submission.feedback}</p>}
                 {selectedHomework.submission?.state === 'checked' && (
                   <p className="mt-2 text-sm">O‘qituvchi bahosi: <strong>{selectedHomework.submission.teacher_result === 'done' ? 'Bajardi' : 'Bajarmadi'}</strong></p>
@@ -1465,11 +1785,11 @@ export default function MainApp() {
                       <ActionButton className={recording ? 'mini-danger' : 'mini-secondary'} disabled={busy} onClick={toggleVoiceRecording}>
                         {recording ? <><Square size={15} /> Ovoz yozishni tugatish</> : <><Mic size={15} /> Ilovada ovoz yozish</>}
                       </ActionButton>
-                      {recordedProof && <p className="text-xs text-[var(--mini-muted)]">Ovozli proof tayyor: {recordedProofDuration} soniya. Draft saqlang.</p>}
+                      {recordedProof && <p className="text-xs text-[var(--mini-muted)]">Ovozli tasdiq tayyor: {recordedProofDuration} soniya. Qoralamani saqlang.</p>}
                     </div>
                   )}
-                  {selectedHomework.submission?.state === 'draft' && <p className="text-xs text-[var(--mini-muted)]">Draft o‘qituvchiga ko‘rinmaydi. Kamida bitta fayl yoki matn va aynan bitta 3 soniyalik ovozli xabar yoki dumaloq video kerak. Ovoz yozish ishlamasa, botdan proof yuboring.</p>}
-                  <ActionButton type="submit" disabled={busy || (!submissionForm.text.trim() && !submissionForm.files.length)}>{busy ? 'Saqlanmoqda…' : 'Draftni saqlash'}</ActionButton>
+                  {selectedHomework.submission?.state === 'draft' && <p className="text-xs text-[var(--mini-muted)]">Qoralama o‘qituvchiga ko‘rinmaydi. Kamida bitta fayl yoki matn va aynan bitta 3 soniyalik ovozli xabar yoki dumaloq video kerak. Ovoz yozish ishlamasa, bot orqali tasdiq yozuvini yuboring.</p>}
+                  <ActionButton type="submit" disabled={busy || (!submissionForm.text.trim() && !submissionForm.files.length)}>{busy ? 'Saqlanmoqda…' : 'Qoralamani saqlash'}</ActionButton>
                 </form>}
                 <ActionButton className="mini-secondary mt-3 w-full" onClick={async () => {
                   try {
@@ -1480,7 +1800,7 @@ export default function MainApp() {
                   } catch (linkError) {
                     setError(linkError.message || 'Bot havolasini ochib bo‘lmadi.')
                   }
-                }}>Botda proof yuborish</ActionButton>
+                }}>Bot orqali tasdiq yozuvini yuborish</ActionButton>
               </Panel>
             )}
             {teacher && (
@@ -1532,7 +1852,7 @@ export default function MainApp() {
               <div className="mt-3 grid gap-3">
                 {homeworkHistory.submissions.map((attempt) => (
                   <div key={attempt.id} className="rounded-2xl bg-[var(--mini-bg)] p-3">
-                    <p className="text-sm font-semibold">Urinish {attempt.attempt_number} · {attempt.state === 'draft' ? 'Draft' : attempt.state === 'expired' ? 'Muddati tugagan' : attempt.state === 'checked' ? attempt.teacher_result === 'done' ? 'Bajardi' : 'Bajarmadi' : 'Topshirildi'}</p>
+                    <p className="text-sm font-semibold">Urinish {attempt.attempt_number} · {attempt.state === 'draft' ? 'Qoralama' : attempt.state === 'expired' ? 'Muddati tugagan' : attempt.state === 'checked' ? attempt.teacher_result === 'done' ? 'Bajardi' : 'Bajarmadi' : 'Topshirildi'}</p>
                     <p className="mt-1 text-xs text-[var(--mini-muted)]">{attempt.student_name || formatDate(attempt.submitted_at || attempt.created_at)}</p>
                     {attempt.content_text && <p className="mt-2 whitespace-pre-wrap text-sm">{attempt.content_text}</p>}
                     {attempt.files.map((file) => <SubmissionFile key={file.id} file={file} />)}
@@ -1566,8 +1886,12 @@ export default function MainApp() {
           <section className="mt-7">
             <h1 className="text-xl font-extrabold">{student ? 'Mening to‘lovlarim' : 'To‘lovlar'}</h1>
             <p className="mt-1 text-sm text-[var(--mini-muted)]">So‘nggi 100 ta to‘lov</p>
+            <label className="mini-field mt-3">
+              <span>O‘quvchi yoki miqdor bo‘yicha qidirish</span>
+              <input type="search" value={paymentSearch} onChange={(event) => { setPaymentSearch(event.target.value); setPaymentPage(0) }} />
+            </label>
             <div className="mt-4 grid gap-3">
-              {payments.map((item) => (
+              {visiblePayments.map((item) => (
                 <Panel key={item.id}>
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0">
@@ -1578,18 +1902,43 @@ export default function MainApp() {
                   </div>
                 </Panel>
               ))}
-              {!payments.length && !loading && <Panel>To‘lovlar topilmadi.</Panel>}
+              {!filteredPayments.length && !loading && <EmptyState title="To‘lovlar topilmadi" description="Qidiruvni o‘zgartiring yoki yangi to‘lovlar kelishini kuting." />}
             </div>
+            {filteredPayments.length > 20 && (
+              <div className="mini-pagination">
+                <ActionButton className="mini-secondary" disabled={paymentPage === 0} onClick={() => setPaymentPage((current) => current - 1)}>Oldingi</ActionButton>
+                <span>{paymentPage + 1} / {Math.ceil(filteredPayments.length / 20)}</span>
+                <ActionButton className="mini-secondary" disabled={(paymentPage + 1) * 20 >= filteredPayments.length} onClick={() => setPaymentPage((current) => current + 1)}>Keyingi</ActionButton>
+              </div>
+            )}
           </section>
         )}
 
         {page === 'attendance' && (
           <section className="mt-7">
-            <h1 className="text-xl font-extrabold">{student ? 'Mening davomatim' : 'Davomat'}</h1>
+            <h1 className="text-xl font-extrabold">{student ? 'Jadval va davomat' : 'Davomat'}</h1>
+            {student && (
+              <Panel className="mt-4">
+                <h2 className="font-bold">Haftalik dars jadvali</h2>
+                <div className="mt-3 grid gap-2">
+                  {['Dushanba', 'Seshanba', 'Chorshanba', 'Payshanba', 'Juma', 'Shanba', 'Yakshanba'].map((day, index) => {
+                    const lessons = scheduleEntries.filter((item) => Number(item.day) === index)
+                      .sort((left, right) => String(left.startTime).localeCompare(String(right.startTime)))
+                    return lessons.length ? (
+                      <div key={day} className="rounded-2xl bg-[var(--mini-bg)] p-3">
+                        <p className="font-semibold">{day}</p>
+                        {lessons.map((lesson, lessonIndex) => <p key={`${lesson.groupId}-${lessonIndex}`} className="mt-1 text-sm text-[var(--mini-muted)]">{lesson.startTime || 'Vaqt yo‘q'}{lesson.endTime ? `–${lesson.endTime}` : ''} · {lesson.groupName}</p>)}
+                      </div>
+                    ) : null
+                  })}
+                  {!scheduleEntries.length && <p className="text-sm text-[var(--mini-muted)]">Sizga dars jadvali biriktirilmagan.</p>}
+                </div>
+              </Panel>
+            )}
             {(teacher || privileged) && (
               <Panel className="mt-4">
                 <h2 className="font-bold">Davomat belgilash</h2>
-                <form className="mt-4 grid gap-3" onSubmit={saveAttendance}>
+                <form id="mini-attendance-form" className="mt-4 grid gap-3" onSubmit={saveAttendance}>
                   <label className="mini-field"><span>Guruh</span><select value={attendanceForm.groupId} onChange={(event) => setAttendanceForm({ ...attendanceForm, groupId: event.target.value })} required>
                     <option value="">Guruhni tanlang</option>
                     {groups.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
@@ -1698,10 +2047,10 @@ export default function MainApp() {
               <h2 className="font-bold">O‘quvchilar ro‘yxati</h2>
               <label className="mini-field mt-3">
                 <span>Ism yoki telefon bo‘yicha qidirish</span>
-                <input type="search" value={studentSearch} onChange={(event) => setStudentSearch(event.target.value)} />
+                <input type="search" value={studentSearch} onChange={(event) => { setStudentSearch(event.target.value); setStudentPage(0) }} />
               </label>
               <div className="mt-3 divide-y divide-[var(--mini-border)]">
-                {students.filter((item) => `${item.name} ${item.phone}`.toLowerCase().includes(studentSearch.toLowerCase())).map((item) => (
+                {visibleStudents.map((item) => (
                   <Panel key={item.id} className="my-3">
                     <p className="truncate text-sm font-semibold">{item.name}</p>
                     <p className="text-xs text-[var(--mini-muted)]">{item.phone || 'Telefon yo‘q'}</p>
@@ -1714,7 +2063,7 @@ export default function MainApp() {
                       <ActionButton className="mini-secondary min-h-9 px-3 text-xs" disabled={busy} onClick={() => revealStudentPassword(item)}>Parolni ko‘rsatish</ActionButton>
                       <ActionButton className="mini-secondary min-h-9 px-3 text-xs" disabled={busy} onClick={() => setStudentPasswordForm({ studentId: item.id, username: item.login || '', password: '' })}>Parolni o‘zgartirish</ActionButton>
                       {item.telegram_id
-                        ? <><span className="self-center text-xs text-[var(--mini-muted)]">Telegram ulangan</span><ActionButton className="mini-secondary min-h-9 px-3 text-xs" disabled={busy} onClick={() => unlinkStudent(item)}>Telegramdan uzish</ActionButton></>
+                        ? <><span className="self-center text-xs text-[var(--mini-muted)]">Telegram ulangan</span><ActionButton className="mini-secondary min-h-9 px-3 text-xs" disabled={busy} onClick={() => confirmUnlinkStudent(item)}>Telegramdan uzish</ActionButton></>
                         : <><span className="self-center text-xs text-[var(--mini-muted)]">Telegram ulanmagan</span><ActionButton className="mini-secondary min-h-9 px-3 text-xs" disabled={busy} onClick={() => createInvite({ studentId: item.id })}>Ulash</ActionButton></>}
                       <ActionButton className="mini-secondary min-h-9 px-3 text-xs" disabled={busy} onClick={() => editStudent(item)}>Tahrirlash</ActionButton>
                       {inviteLinks[item.id] && <button className="mini-link max-w-36 truncate text-xs" type="button" onClick={() => copyText(inviteLinks[item.id])}>{copied ? 'Nusxalandi' : 'Havolani nusxalash'}</button>}
@@ -1729,8 +2078,15 @@ export default function MainApp() {
                     )}
                   </Panel>
                 ))}
-                {!students.length && <p className="py-4 text-sm text-[var(--mini-muted)]">O‘quvchilar topilmadi.</p>}
+                {!filteredStudents.length && <p className="py-4 text-sm text-[var(--mini-muted)]">O‘quvchilar topilmadi.</p>}
               </div>
+              {filteredStudents.length > 20 && (
+                <div className="mini-pagination">
+                  <ActionButton className="mini-secondary" disabled={studentPage === 0} onClick={() => setStudentPage((current) => current - 1)}>Oldingi</ActionButton>
+                  <span>{studentPage + 1} / {Math.ceil(filteredStudents.length / 20)}</span>
+                  <ActionButton className="mini-secondary" disabled={(studentPage + 1) * 20 >= filteredStudents.length} onClick={() => setStudentPage((current) => current + 1)}>Keyingi</ActionButton>
+                </div>
+              )}
             </Panel>
             {canAccessEndpoint(role, 'staff:manage') && (
               <Panel>
@@ -1749,7 +2105,7 @@ export default function MainApp() {
                       <div><p className="text-sm font-semibold">{item.name}</p><p className="text-xs text-[var(--mini-muted)]">@{item.username} · {item.role === 'teacher' ? 'O‘qituvchi' : 'Qabulxona'} · {item.phone || 'Telefon yo‘q'}</p></div>
                       <div className="flex flex-wrap gap-1">
                         <ActionButton className="mini-secondary min-h-9 px-3 text-xs" disabled={busy} onClick={() => { setEditingStaffId(item.id); setStaffUsernameAuto(false); setStaffForm({ name: item.name, phone: item.phone || '', role: item.role, username: item.username, password: '' }) }}>Tahrirlash / parolni tiklash</ActionButton>
-                        <ActionButton className="mini-secondary min-h-9 px-3 text-xs" disabled={busy} onClick={() => toggleStaffActive(item)}>{item.is_active ? 'Faolsizlantirish' : 'Faollashtirish'}</ActionButton>
+                        <ActionButton className="mini-secondary min-h-9 px-3 text-xs" disabled={busy} onClick={() => requestStaffStatusChange(item)}>{item.is_active ? 'Faolsizlantirish' : 'Faollashtirish'}</ActionButton>
                       </div>
                     </div>
                   ))}
@@ -1783,7 +2139,7 @@ export default function MainApp() {
                         ? <span className="text-xs text-[var(--mini-muted)]">Telegram ulangan</span>
                         : item.profile_id && <ActionButton className="mini-secondary min-h-9 px-3 text-xs" disabled={busy} onClick={() => createInvite({ profileId: item.profile_id })}>Ulash</ActionButton>)}
                       {canAccessEndpoint(role, 'staff:manage') && <ActionButton className="mini-secondary min-h-9 px-3 text-xs" disabled={busy} onClick={() => editTeacher(item)}>Tahrirlash</ActionButton>}
-                      {canAccessEndpoint(role, 'staff:manage') && <ActionButton className="mini-secondary min-h-9 px-3 text-xs" disabled={busy} onClick={() => removeTeacher(item)}>O‘chirish</ActionButton>}
+                      {canAccessEndpoint(role, 'staff:manage') && <ActionButton className="mini-secondary min-h-9 px-3 text-xs" disabled={busy} onClick={() => confirmRemoveTeacher(item)}>O‘chirish</ActionButton>}
                     </div>
                   </div>
                 ))}
@@ -1823,7 +2179,7 @@ export default function MainApp() {
                     <span className="text-sm">{item.name}</span>
                     <div className="flex gap-1">
                       <ActionButton className="mini-secondary min-h-9 px-3 text-xs" disabled={busy} onClick={() => editGroup(item)}>Tahrirlash</ActionButton>
-                      <ActionButton className="mini-secondary min-h-9 px-3 text-xs" disabled={busy} onClick={() => removeGroup(item)}>O‘chirish</ActionButton>
+                      <ActionButton className="mini-secondary min-h-9 px-3 text-xs" disabled={busy} onClick={() => confirmRemoveGroup(item)}>O‘chirish</ActionButton>
                     </div>
                   </div>
                 ))}
@@ -1874,6 +2230,25 @@ export default function MainApp() {
           </section>
         )}
       </div>
+      <nav className="mini-bottom-nav" aria-label="Asosiy menyu">
+        {visibleNav.map(({ id, label, icon: Icon }) => (
+          <button key={id} type="button" onClick={() => navTo(id)} aria-current={page === id ? 'page' : undefined}>
+            <Icon size={20} aria-hidden="true" />
+            <span>{label}</span>
+          </button>
+        ))}
+      </nav>
+      <ConfirmDialog
+        open={Boolean(confirmDialog)}
+        title={confirmDialog?.title}
+        description={confirmDialog?.description}
+        onCancel={() => setConfirmDialog(null)}
+        onConfirm={() => {
+          const action = confirmDialog?.onConfirm
+          setConfirmDialog(null)
+          action?.()
+        }}
+      />
     </main>
   )
 }

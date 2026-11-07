@@ -2314,12 +2314,15 @@ async function getStudentMiniAppOverview(request, env, profile) {
       submission,
     }
   }))
-  const [paymentRows, attendanceRows] = await Promise.all([
+  const [paymentRows, attendanceRows, groupRows] = await Promise.all([
     env.DB.prepare(`SELECT id, student_id, student_name, amount, month, year, paid_at
       FROM payments WHERE student_id = ? ORDER BY paid_at DESC LIMIT 100`).bind(profile.student_id).all(),
     env.DB.prepare(`SELECT a.id, a.student_id, a.group_id, a.date, a.status, a.note, g.name AS group_name
       FROM attendance a LEFT JOIN groups g ON g.id = a.group_id
       WHERE a.student_id = ? ORDER BY a.date DESC LIMIT 100`).bind(profile.student_id).all(),
+    env.DB.prepare(`SELECT g.id, g.name, g.teacher_id, g.schedule
+      FROM groups g JOIN group_students gs ON gs.group_id = g.id
+      WHERE gs.student_id = ? ORDER BY g.name`).bind(profile.student_id).all(),
   ])
   return json({
     data: {
@@ -2328,6 +2331,10 @@ async function getStudentMiniAppOverview(request, env, profile) {
       attendance: (attendanceRows.results || []).map(({ group_name, ...attendance }) => ({
         ...attendance,
         groups: { name: group_name },
+      })),
+      groups: (groupRows.results || []).map((group) => ({
+        ...group,
+        schedule: JSON.parse(group.schedule || '[]'),
       })),
     },
   })
