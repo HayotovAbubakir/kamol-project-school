@@ -71,7 +71,7 @@ async function request(path, options = {}, canRefresh = true) {
     && canRefresh
     && token
     && token === session?.access_token
-    && session.refresh_token
+    && Boolean(session?.refresh_token)
     && path !== '/api/auth/login'
     && path !== '/api/auth/refresh'
   ) {
@@ -234,6 +234,22 @@ class CloudflareClient {
       }
     },
 
+    async signInWithTelegramCredentials({ username, password }) {
+      const initData = typeof window === 'undefined' ? '' : window.Telegram?.WebApp?.initData
+      if (!initData) return { data: { user: null, session: null }, error: new Error('Mini App’ni Telegram ichidan oching.') }
+      try {
+        const { response, result } = await request('/api/auth/telegram/password', {
+          body: { initData, username, password },
+        })
+        if (!response.ok) return { data: { user: null, session: null }, error: new Error(result.error || 'Login yoki parol noto‘g‘ri.') }
+        writeSession(result.session)
+        emitAuth('SIGNED_IN', result.session)
+        return { data: result, error: null }
+      } catch (error) {
+        return { data: { user: null, session: null }, error }
+      }
+    },
+
     async getSession() {
       const session = readSession()
       if (!session?.access_token) return { data: { session: null }, error: null }
@@ -342,7 +358,7 @@ export const cloudflare = new CloudflareClient()
 export const isBackendConfigured = true
 export const AUTH_STORAGE_KEY = SESSION_KEY
 export const LEGACY_AUTH_EMAIL_DOMAIN = 'kamol.school'
-export const MIN_PASSWORD_LENGTH = 8
+export const MIN_PASSWORD_LENGTH = 12
 
 export function normalizeUsername(username) {
   const raw = String(username || '').trim().toLowerCase()

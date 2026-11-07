@@ -139,6 +139,9 @@ export function DataProvider({ children }) {
       async voidPayment(payment) {
         await run(() => api.voidPayment(payment))
       },
+      async updatePayment(id, payment) {
+        await run(() => api.updatePayment(id, payment))
+      },
       async deletePayment(id) {
         await run(() => api.deletePayment(id))
       },
@@ -154,11 +157,14 @@ export function DataProvider({ children }) {
       async deleteExpense(id) {
         await run(() => api.deleteExpense(id))
       },
-      async addAdminUser(userPayload) {
-        await run(() => api.addAdminUser(userPayload))
+      async addReceptionUser(userPayload) {
+        await run(() => api.addReceptionUser(userPayload))
       },
-      async removeAdminUser(id) {
-        await run(() => api.removeAdminUser(id))
+      async setReceptionActive(id, active) {
+        await run(() => api.setReceptionActive(id, active))
+      },
+      async updateReceptionUser(payload) {
+        await run(() => api.updateReceptionUser(payload))
       },
       async markAttendance(payload) {
         await run(() => api.markAttendance(payload))

@@ -11,6 +11,7 @@ import {
   Lock,
   LogOut,
   Menu,
+  MessageCircle,
   Palette,
   PanelLeftClose,
   PanelLeftOpen,
@@ -57,6 +58,7 @@ function buildNav(base, { ownerAccount = false } = {}) {
       labelKey: 'nav.system',
       items: [
         { to: `${base}/notifications`, labelKey: 'nav.notifications', icon: Bell },
+        { to: `${base}/questions`, labelKey: 'nav.questions', icon: MessageCircle },
         { to: `${base}/settings/fon`, labelKey: 'nav.appearance', icon: Palette },
         ...(ownerAccount
           ? [{ to: `${base}/settings/account`, labelKey: 'nav.account', icon: Lock }]
@@ -70,7 +72,27 @@ function buildNav(base, { ownerAccount = false } = {}) {
 
 const NAV = {
   owner: buildNav('/owner', { ownerAccount: true }),
-  admin: buildNav('/admin'),
+  reception: [
+    {
+      items: [{ to: '/reception', labelKey: 'nav.home', end: true, icon: Home }],
+    },
+    {
+      labelKey: 'nav.education',
+      items: [
+        { to: '/reception/groups', labelKey: 'nav.groups', icon: Users },
+        { to: '/reception/teachers', labelKey: 'nav.teachers', icon: HardHat },
+        { to: '/reception/students', labelKey: 'nav.students', icon: GraduationCap },
+        { to: '/reception/schedule', labelKey: 'nav.schedule', icon: CalendarDays },
+        { to: '/reception/attendance', labelKey: 'nav.attendance', icon: ClipboardCheck },
+        { to: '/reception/payments/debtors', labelKey: 'nav.debtors', icon: UserRound },
+        { to: '/reception/questions', labelKey: 'nav.questions', icon: MessageCircle },
+      ],
+    },
+    {
+      labelKey: 'nav.system',
+      items: [{ to: '/reception/settings/fon', labelKey: 'nav.appearance', icon: Palette }],
+    },
+  ],
   teacher: [
     {
       items: [
@@ -98,13 +120,17 @@ const BOTTOM_NAV = {
     { to: '/owner/students', labelKey: 'nav.students', icon: GraduationCap },
     { to: '/owner/finance', labelKey: 'nav.financeSummary', icon: ChartColumn },
     { to: '/owner/notifications', labelKey: 'nav.notifications', icon: Bell },
+    { to: '/owner/questions', labelKey: 'nav.questions', icon: MessageCircle },
   ],
-  admin: [
-    { to: '/admin', labelKey: 'nav.home', end: true, icon: Home },
-    { to: '/admin/groups', labelKey: 'nav.groups', icon: Users },
-    { to: '/admin/students', labelKey: 'nav.students', icon: GraduationCap },
-    { to: '/admin/finance', labelKey: 'nav.financeSummary', icon: ChartColumn },
-    { to: '/admin/notifications', labelKey: 'nav.notifications', icon: Bell },
+  reception: [
+    { to: '/reception', labelKey: 'nav.home', end: true, icon: Home },
+    { to: '/reception/groups', labelKey: 'nav.groups', icon: Users },
+    { to: '/reception/students', labelKey: 'nav.students', icon: GraduationCap },
+    { to: '/reception/teachers', labelKey: 'nav.teachers', icon: HardHat },
+    { to: '/reception/schedule', labelKey: 'nav.schedule', icon: CalendarDays },
+    { to: '/reception/attendance', labelKey: 'nav.attendance', icon: ClipboardCheck },
+    { to: '/reception/payments/debtors', labelKey: 'nav.debtors', icon: UserRound },
+    { to: '/reception/questions', labelKey: 'nav.questions', icon: MessageCircle },
   ],
 }
 
@@ -117,6 +143,7 @@ const PAGE_TITLES = [
   { match: /\/teacher\/attendance/, titleKey: 'nav.attendance' },
   { match: /\/teacher\/groups/, titleKey: 'nav.myGroups' },
   { match: /\/finance\/debtors/, titleKey: 'nav.debtors' },
+  { match: /\/payments\/debtors/, titleKey: 'nav.debtors' },
   { match: /\/finance\/paid/, titleKey: 'nav.paid' },
   { match: /\/finance$/, titleKey: 'nav.financeSummary' },
   { match: /\/groups/, titleKey: 'nav.groups' },
@@ -124,6 +151,7 @@ const PAGE_TITLES = [
   { match: /\/students/, titleKey: 'nav.students' },
   { match: /\/schedule/, titleKey: 'nav.schedule' },
   { match: /\/notifications/, titleKey: 'nav.notifications' },
+  { match: /\/questions/, titleKey: 'nav.questions' },
 ]
 
 function resolvePageTitle(pathname) {

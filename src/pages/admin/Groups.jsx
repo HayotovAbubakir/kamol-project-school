@@ -221,7 +221,7 @@ export default function AdminGroups() {
             <p>{teacherLabel}</p>
           </div>
           <StatusBadge tone="success">{t('admin.student.count', { count: selected.studentIds.length })}</StatusBadge>
-          <button
+          {user?.role === 'owner' && <button
             type="button"
             className="btn-icon-danger master-detail-delete"
             onClick={() => remove(selected)}
@@ -229,7 +229,7 @@ export default function AdminGroups() {
             title={t('common.delete')}
           >
             <Trash2 size={15} />
-          </button>
+          </button>}
         </div>
 
         <div className="detail-meta-grid">

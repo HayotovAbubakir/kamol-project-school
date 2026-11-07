@@ -33,7 +33,7 @@ export function NotificationProvider({ children }) {
   const [toasts, setToasts] = useState([])
   const toastTimers = useRef(new Map())
 
-  const isStaff = user?.role === 'owner' || user?.role === 'admin'
+  const isStaff = user?.role === 'owner' || user?.role === 'reception'
   const now = currentMonthYear()
 
   // Joriy oy live xabarlarini arxivga yozish

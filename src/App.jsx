@@ -11,6 +11,7 @@ const Login = lazy(() => import('./pages/Login'))
 const AdminGroups = lazy(() => import('./pages/admin/Groups'))
 const AdminStudents = lazy(() => import('./pages/admin/Students'))
 const AdminTeachers = lazy(() => import('./pages/admin/Teachers'))
+const AdminAttendance = lazy(() => import('./pages/admin/Attendance'))
 const OwnerAccountSettings = lazy(() => import('./pages/owner/AccountSettings'))
 const OwnerDashboard = lazy(() => import('./pages/owner/Dashboard'))
 const OwnerDebtors = lazy(() => import('./pages/owner/Debtors'))
@@ -20,6 +21,7 @@ const OwnerPaid = lazy(() => import('./pages/owner/Paid'))
 const OwnerRoles = lazy(() => import('./pages/owner/Roles'))
 const OwnerSchedule = lazy(() => import('./pages/owner/Schedule'))
 const OwnerUsers = lazy(() => import('./pages/owner/Users'))
+const Questions = lazy(() => import('./pages/Questions'))
 const TodayAbsent = lazy(() => import('./pages/owner/TodayAbsent'))
 const AppearanceSettings = lazy(() => import('./pages/settings/Appearance'))
 const TeacherDashboard = lazy(() => import('./pages/teacher/Dashboard'))
@@ -49,11 +51,15 @@ export default function App() {
               <Route path="teachers" element={<AdminTeachers />} />
               <Route path="students" element={<AdminStudents />} />
               <Route path="schedule" element={<OwnerSchedule />} />
+              <Route path="attendance" element={<AdminAttendance />} />
+              <Route path="attendance/absent-today" element={<TodayAbsent />} />
+              <Route path="payments/debtors" element={<OwnerDebtors />} />
               <Route path="finance" element={<OwnerFinance />} />
               <Route path="finance/paid" element={<OwnerPaid />} />
               <Route path="finance/debtors" element={<OwnerDebtors />} />
               <Route path="attendance/absent-today" element={<TodayAbsent />} />
               <Route path="notifications" element={<OwnerNotifications />} />
+              <Route path="questions" element={<Questions />} />
               <Route path="settings/appearance" element={<Navigate to="/owner/settings/fon" replace />} />
               <Route path="settings/fon" element={<AppearanceSettings />} />
               <Route path="settings/account" element={<OwnerAccountSettings />} />
@@ -65,25 +71,23 @@ export default function App() {
             </Route>
           </Route>
 
-          <Route element={<AuthGuard allowedRoles={['admin']} />}>
-            <Route path="/admin" element={<AppShell role="admin" />}>
+          <Route element={<AuthGuard allowedRoles={['reception']} />}>
+            <Route path="/reception" element={<AppShell role="reception" />}>
               <Route index element={<OwnerDashboard />} />
               <Route path="groups" element={<AdminGroups />} />
               <Route path="teachers" element={<AdminTeachers />} />
               <Route path="students" element={<AdminStudents />} />
               <Route path="schedule" element={<OwnerSchedule />} />
-              <Route path="finance" element={<OwnerFinance />} />
-              <Route path="finance/paid" element={<OwnerPaid />} />
-              <Route path="finance/debtors" element={<OwnerDebtors />} />
-              <Route path="attendance/absent-today" element={<TodayAbsent />} />
-              <Route path="notifications" element={<OwnerNotifications />} />
-              <Route path="settings/appearance" element={<Navigate to="/admin/settings/fon" replace />} />
+              <Route path="settings/appearance" element={<Navigate to="/reception/settings/fon" replace />} />
               <Route path="settings/fon" element={<AppearanceSettings />} />
-              <Route path="settings/staff" element={<OwnerUsers />} />
-              <Route path="settings/roles" element={<OwnerRoles />} />
-              <Route path="payments" element={<Navigate to="/admin/finance/debtors" replace />} />
-              <Route path="attendance" element={<Navigate to="/admin" replace />} />
-              <Route path="expenses" element={<Navigate to="/admin/finance" replace />} />
+              <Route path="attendance" element={<AdminAttendance />} />
+              <Route path="payments" element={<Navigate to="/reception/payments/debtors" replace />} />
+              <Route path="payments/debtors" element={<OwnerDebtors />} />
+              <Route path="questions" element={<Questions />} />
+              <Route path="finance/*" element={<Navigate to="/reception" replace />} />
+              <Route path="settings/staff/*" element={<Navigate to="/reception" replace />} />
+              <Route path="settings/roles/*" element={<Navigate to="/reception" replace />} />
+              <Route path="notifications" element={<Navigate to="/reception" replace />} />
             </Route>
           </Route>
 

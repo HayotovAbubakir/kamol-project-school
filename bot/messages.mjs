@@ -39,7 +39,7 @@ export function welcomeAskCode() {
     'Farzandingizning o‘quvchi ID sini yuboring.',
     'Masalan: KS-A7F2K9',
     '',
-    'ID ni maktab administratsiyasidan olishingiz mumkin.',
+    'ID ni maktab Qabulxonasidan olishingiz mumkin.',
   ].join('\n')
 }
 

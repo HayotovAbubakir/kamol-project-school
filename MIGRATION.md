@@ -70,11 +70,12 @@ GitHub prompts for the value; do not put it in a command argument or chat. Also 
 
 ## Verification state — 2026-11-07
 
-- Created an empty D1 database `kamol-school-db` (`f1b7121c-7ae3-4e12-a7d5-0a8c2ee93aab`) and applied all three migrations remotely. Initial profiles, groups, students, and teachers counts are all zero.
-- Reused the existing `kamol-files` R2 bucket; a production upload/download round-trip succeeded and the temporary test object was deleted.
-- Deployed the Worker and static assets at <https://kamol-project-school.hayotovabubakir.workers.dev>. `/api/health` and `/miniapp.html` both returned HTTP 200.
-- Generated Worker secrets were installed without printing their values. Cloudflare account ID and non-user-generated Worker secrets were added to GitHub Actions secrets.
-- Owner account and Telegram webhook have not been set up: the owner password and BotFather token must be supplied by the owner. The GitHub Actions deploy token is also not configured.
-- No old Supabase data was migrated. The previous Supabase project has not been accessed and may be deleted by its owner at any time.
+- Applied migrations `0001`–`0004` to remote D1. Before migration, the only profile was the existing owner; groups, students, and teachers were empty. The owner profile remains after migration.
+- Replayed all four migrations against a clean local D1 successfully. The remote schema includes the homework Telegram source-message fields.
+- Reused the existing `kamol-files` R2 bucket. A temporary production object was uploaded, downloaded and hash-compared, then deleted.
+- Deployed Worker and static assets at <https://kamol-project-school.hayotovabubakir.workers.dev> (version `552779bb-df18-4200-ba5c-1a7632b9ea3b`). `/api/health`, `/`, and `/miniapp.html` after redirect returned HTTP 200. Unauthenticated finance, homework and question API requests returned HTTP 401.
+- Worker secret names were checked without reading or printing values; `TELEGRAM_BOT_TOKEN` and required Worker secrets are present. The GitHub secret `CLOUDFLARE_API_TOKEN` is absent, so the Actions deploy job skips successfully with a clear message.
+- Owner login was not tested because the existing owner password is not available in this environment. Telegram `getWebhookInfo`, real `/start`, and phone-based voice/video-note delivery were not verified.
+- No old Supabase data was migrated. The previous Supabase project was not accessed and may be deleted by its owner at any time.
 
-Do not treat the app or bot as fully verified until owner login and authenticated D1/R2 API operations succeed, and (after the bot token is set) Telegram `getWebhookInfo` has no webhook errors. Local lint/test/build success and a health check alone do not prove those flows.
+The deployment is live, but do not treat owner-authenticated workflows or Telegram delivery as verified until the owner tests login and the webhook/phone checks are completed.

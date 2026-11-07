@@ -24,7 +24,8 @@ export default function OwnerDashboard() {
   const { t } = useLanguage()
   const navigate = useNavigate()
   const { pathname } = useLocation()
-  const base = pathname.startsWith('/admin') ? '/admin' : '/owner'
+  const isReception = pathname.startsWith('/reception')
+  const base = isReception ? '/reception' : '/owner'
   const today = todayISO()
   const { month, year } = currentMonthYear()
   const lessons = useMemo(() => getTodayLessons(data), [data])
@@ -58,32 +59,36 @@ export default function OwnerDashboard() {
           value={debtorCount}
           tone="danger"
           icon={UserRound}
-          onClick={() => navigate(`${base}/finance/debtors`)}
+          onClick={() => navigate(isReception ? `${base}/payments/debtors` : `${base}/finance/debtors`)}
         />
         <StatCard
           label={t('owner.dashboard.todayAbsent')}
           value={absentCount}
           tone="warning"
           icon={UserX}
-          onClick={() => navigate(`${base}/attendance/absent-today`)}
+          onClick={() => navigate(isReception ? `${base}/attendance` : `${base}/attendance/absent-today`)}
         />
-        <StatCard
-          label={t('owner.finance.payments')}
-          value={formatMoney(finance.studentIncome)}
-          icon={Wallet}
-          tone="success"
-          featured
-          sparkline={getTrendSparkline(trend, 'paid')}
-          delta={getTrendDelta(trend, 'paid')}
-          onClick={() => navigate(`${base}/finance`)}
-        />
-        <StatCard
-          label={t('owner.finance.expected')}
-          value={formatMoney(finance.expected)}
-          icon={Hourglass}
-          tone="default"
-          onClick={() => navigate(`${base}/finance`)}
-        />
+        {!isReception && (
+          <>
+            <StatCard
+              label={t('owner.finance.payments')}
+              value={formatMoney(finance.studentIncome)}
+              icon={Wallet}
+              tone="success"
+              featured
+              sparkline={getTrendSparkline(trend, 'paid')}
+              delta={getTrendDelta(trend, 'paid')}
+              onClick={() => navigate(`${base}/finance`)}
+            />
+            <StatCard
+              label={t('owner.finance.expected')}
+              value={formatMoney(finance.expected)}
+              icon={Hourglass}
+              tone="default"
+              onClick={() => navigate(`${base}/finance`)}
+            />
+          </>
+        )}
       </div>
 
       <section className="home-panel matte-panel home-lessons-panel">
@@ -118,10 +123,12 @@ export default function OwnerDashboard() {
         )}
       </section>
 
-      <div className="dashboard-grid home-finance-charts">
-        <RevenueTrendChart data={trend} />
-        <FinancePieChart data={breakdown} />
-      </div>
+      {!isReception && (
+        <div className="dashboard-grid home-finance-charts">
+          <RevenueTrendChart data={trend} />
+          <FinancePieChart data={breakdown} />
+        </div>
+      )}
     </PageEnter>
   )
 }

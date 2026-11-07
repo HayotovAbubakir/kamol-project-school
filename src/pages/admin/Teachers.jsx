@@ -2,7 +2,6 @@ import { Eye, EyeOff, KeyRound, Pencil, Plus, Trash2, UserCog } from 'lucide-rea
 import { useEffect, useMemo, useState } from 'react'
 import PhoneInput from '../../components/PhoneInput'
 import { PageEnter } from '../../components/motion/PageMotion'
-import TemporaryCredentialsModal from '../../components/TemporaryCredentialsModal'
 import {
   Avatar,
   GlowButton,
@@ -17,17 +16,21 @@ import {
 import { useData } from '../../context/DataContext'
 import { useDialog } from '../../context/DialogContext'
 import { useLanguage } from '../../context/LanguageContext'
+import { useAuth } from '../../context/AuthContext'
 import { formatPhone, joinPersonName, splitPersonName } from '../../lib/utils'
 import { isCompletePhone, isEmptyPhone, phoneFieldState } from '../../lib/phone'
 import { matchesSearch, teacherSearchFields } from '../../lib/search'
 import { groupsForTeacher } from '../../lib/store'
 import { MIN_PASSWORD_LENGTH } from '../../lib/cloudflare'
-import { resetUserCredentials } from '../../lib/api'
+import { staff as staffAccounts } from '../../lib/data/index.js'
+import { loginBaseFromName } from '../../../shared/account-credentials.js'
 
-const emptyForm = () => ({ firstName: '', lastName: '', phone: '', username: '', password: '' })
+const emptyForm = () => ({ firstName: '', lastName: '', phone: '', username: '', password: '', autoUsername: true })
 
 export default function AdminTeachers() {
-  const { data, addTeacher, updateTeacher, deleteTeacher } = useData()
+  const { data, deleteTeacher } = useData()
+  const { user } = useAuth()
+  const canManageStaff = user?.role === 'owner'
   const { confirm, alert } = useDialog()
   const { t } = useLanguage()
   const [selectedId, setSelectedId] = useState(null)
@@ -39,8 +42,6 @@ export default function AdminTeachers() {
   const [hasLinkedLogin, setHasLinkedLogin] = useState(false)
   const [showPassword, setShowPassword] = useState(false)
   const [search, setSearch] = useState('')
-  const [temporaryCredentials, setTemporaryCredentials] = useState(null)
-  const [resettingPassword, setResettingPassword] = useState(false)
 
   const linkedLogins = data.users.filter((u) => u.role === 'teacher')
 
@@ -82,6 +83,7 @@ export default function AdminTeachers() {
       phone: teacher.phone || '',
       username: login?.username || '',
       password: '',
+      autoUsername: false,
     })
     setOpen(true)
   }
@@ -121,21 +123,36 @@ export default function AdminTeachers() {
         name: joinPersonName(firstName, lastName),
         phone: form.phone,
       }
-      if (username) payload.username = username
-      if (password) payload.password = password
-
       if (editingId) {
-        await updateTeacher(editingId, payload)
-      } else {
-        const created = await addTeacher(payload)
-        if (created?.id) setSelectedId(created.id)
-        if (created?.loginError) {
-          setForm(emptyForm())
-          setOpen(false)
-          setEditingId(null)
-          await alert({ message: created.loginError })
-          return
+        const linked = linkedLogins.find((item) => item.teacherId === editingId)
+        if (linked) {
+          await staffAccounts.update(linked.id, {
+            ...payload,
+            username: username || linked.username,
+            role: 'teacher',
+            ...(password ? { password } : {}),
+          })
+        } else {
+          if (password.length < MIN_PASSWORD_LENGTH) throw new Error(t('domain.error.passwordTooShort'))
+          await staffAccounts.create({
+            ...payload,
+            username,
+            auto_username: form.autoUsername,
+            password,
+            role: 'teacher',
+            teacher_id: editingId,
+            monthly_salary: data.teachers.find((teacher) => teacher.id === editingId)?.monthlySalary || 0,
+          })
         }
+      } else {
+        if (password.length < MIN_PASSWORD_LENGTH) throw new Error(t('domain.error.passwordTooShort'))
+        await staffAccounts.create({
+          ...payload,
+          username,
+          auto_username: form.autoUsername,
+          password,
+          role: 'teacher',
+        })
       }
       setForm(emptyForm())
       setOpen(false)
@@ -164,18 +181,6 @@ export default function AdminTeachers() {
     }
   }
 
-  const resetTeacherPassword = async (user) => {
-    if (!user || resettingPassword) return
-    setResettingPassword(true)
-    try {
-      setTemporaryCredentials(await resetUserCredentials(user))
-    } catch (err) {
-      await alert({ message: err.message || 'Vaqtinchalik parolni o‘rnatib bo‘lmadi.', tone: 'danger' })
-    } finally {
-      setResettingPassword(false)
-    }
-  }
-
   const renderDetail = () => {
     if (!selected) {
       return <div className="master-detail-empty">{t('admin.teacher.select')}</div>
@@ -193,7 +198,7 @@ export default function AdminTeachers() {
             <p>{selected.phone ? formatPhone(selected.phone) : t('admin.student.phoneMissing')}</p>
           </div>
           <StatusBadge tone="success">{t('admin.teacher.countGroups', { count: groups.length })}</StatusBadge>
-          <button
+          {canManageStaff && <button
             type="button"
             className="btn-icon-danger master-detail-delete"
             onClick={() => remove(selected)}
@@ -201,27 +206,27 @@ export default function AdminTeachers() {
             title={t('common.delete')}
           >
             <Trash2 size={15} />
-          </button>
+          </button>}
         </div>
 
         <div className="detail-meta-grid detail-meta-grid-2">
           <div className="detail-meta-item"><span>{t('admin.label.groups')}</span><strong>{groups.length}</strong></div>
-          <div className="detail-meta-item"><span>{t('common.login')}</span><strong>{login ? `@${login.username}` : t('admin.teacher.loginUnassigned')}</strong></div>
+          {canManageStaff && <div className="detail-meta-item"><span>{t('common.login')}</span><strong>{login ? `@${login.username}` : t('admin.teacher.loginUnassigned')}</strong></div>}
         </div>
 
-        <div className="page-header-actions" style={{ marginBottom: 8 }}>
+        {canManageStaff && <div className="page-header-actions" style={{ marginBottom: 8 }}>
           <button type="button" className="btn btn-outline btn-sm" onClick={() => openEdit(selected)}>
             <Pencil size={14} /> {t('common.edit')}
           </button>
           <button
             type="button"
             className="btn btn-outline btn-sm"
-            onClick={() => resetTeacherPassword(login)}
-            disabled={!login || resettingPassword}
+            onClick={() => openEdit(selected)}
+            disabled={!login}
           >
-            <KeyRound size={14} /> {resettingPassword ? 'Tayyorlanmoqda…' : 'Vaqtinchalik parol'}
+            <KeyRound size={14} /> Parolni tiklash
           </button>
-        </div>
+        </div>}
 
         <div className="card">
           <div className="card-header"><strong>{t('admin.label.groups')}</strong></div>
@@ -249,11 +254,11 @@ export default function AdminTeachers() {
   return (
     <PageEnter>
       <PageHeader
-        actions={
+        actions={canManageStaff ? (
           <GlowButton className="btn-primary" onClick={openCreate}>
             <Plus size={16} /> {t('admin.action.addTeacher')}
           </GlowButton>
-        }
+        ) : null}
       />
 
       <div className="stat-grid stat-grid-2">
@@ -295,7 +300,7 @@ export default function AdminTeachers() {
         />
       )}
 
-      <Modal
+      {canManageStaff && <Modal
         open={open}
         title={editingId ? t('admin.modal.editTeacher') : t('admin.modal.newTeacher')}
         onClose={() => setOpen(false)}
@@ -318,11 +323,11 @@ export default function AdminTeachers() {
             <div className="form-grid-2">
               <div className="field">
                 <label>{t('common.name')}</label>
-                <input className="input" value={form.firstName} onChange={(e) => setForm({ ...form, firstName: e.target.value })} required />
+                <input className="input" value={form.firstName} onChange={(e) => setForm((current) => ({ ...current, firstName: e.target.value, username: current.autoUsername ? loginBaseFromName(joinPersonName(e.target.value, current.lastName)) : current.username }))} required />
               </div>
               <div className="field">
                 <label>{t('common.lastName')}</label>
-                <input className="input" value={form.lastName} onChange={(e) => setForm({ ...form, lastName: e.target.value })} required />
+                <input className="input" value={form.lastName} onChange={(e) => setForm((current) => ({ ...current, lastName: e.target.value, username: current.autoUsername ? loginBaseFromName(joinPersonName(current.firstName, e.target.value)) : current.username }))} required />
               </div>
             </div>
             <div className="field">
@@ -344,8 +349,9 @@ export default function AdminTeachers() {
                 className="input"
                 value={form.username}
                 autoComplete="off"
-                onChange={(e) => setForm({ ...form, username: e.target.value })}
+                onChange={(e) => setForm({ ...form, username: e.target.value, autoUsername: false })}
               />
+              <small>Ism.familiya — lotin harflarida; band bo‘lsa avtomatik raqam qo‘shiladi.</small>
             </div>
             <div className="field">
               <label>{t('common.password')}</label>
@@ -371,12 +377,7 @@ export default function AdminTeachers() {
             </div>
           </section>
         </form>
-      </Modal>
-      <TemporaryCredentialsModal
-        credentials={temporaryCredentials}
-        onClose={() => setTemporaryCredentials(null)}
-        subject="O‘qituvchi"
-      />
+      </Modal>}
     </PageEnter>
   )
 }

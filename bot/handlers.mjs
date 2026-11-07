@@ -32,9 +32,8 @@ function roleLabel(role) {
   return ({
     student: 'o‘quvchi',
     teacher: 'o‘qituvchi',
-    admin: 'qabulxona',
     reception: 'qabulxona',
-    owner: 'ega',
+    owner: 'egasi',
   })[role] || 'foydalanuvchi'
 }
 
@@ -82,30 +81,12 @@ async function requireStudent(db, chatId, ctx) {
   return student
 }
 
-async function saveHomeworkSubmission(db, studentId, homeworkId, payload) {
-  await db.submitHomework({
-    homework_id: homeworkId,
-    student_id: studentId,
-    ...payload,
-    status: 'pending',
-    submitted_at: new Date().toISOString(),
-  })
-}
-
-async function handleUploadMessage(ctx, db, token) {
+async function selectedHomework(ctx, db) {
   const chatId = ctx.chat.id
   const existing = await getLinkByChat(db, chatId)
   if (!existing?.students) {
     await ctx.reply(needLink(), removeKeyboard())
-    return
-  }
-
-  const videoNote = ctx.message.video_note
-  const voice = ctx.message.voice
-  const file = videoNote || voice || ctx.message.document || ctx.message.photo?.at(-1)
-  if (!file) {
-    await ctx.reply('Matn yoki fayl bilan birga bitta video yoki ovozli xabar yuboring.')
-    return
+    return null
   }
 
   let targetHomework = await db.getPendingHomework(chatId)
@@ -117,67 +98,54 @@ async function handleUploadMessage(ctx, db, token) {
         keyboard.text(homework.title.slice(0, 48), `homework:${homework.id}`).row()
       }
       await ctx.reply('Fayl qaysi vazifa uchun? Tanlang:', { reply_markup: keyboard })
-      return
+      return null
     }
     targetHomework = homeworkList[0] || null
     if (targetHomework) await db.selectHomework(chatId, targetHomework.id)
   }
   if (!targetHomework) {
     await ctx.reply('Hozir topshirish uchun ochiq vazifa yo‘q.')
+    return null
+  }
+  return targetHomework
+}
+
+async function replyDraftStatus(ctx, db, homeworkId, title) {
+  const draft = await db.getHomeworkDraftState(ctx.chat.id, homeworkId)
+  if (!draft) throw new Error('Vazifa draftini topib bo‘lmadi.')
+  const hasContent = Boolean(String(draft.content_text || draft.text_answer || '').trim())
+    || draft.files?.some((file) => file.kind === 'attachment')
+  const proof = draft.files?.find((file) => file.kind === 'voice' || file.kind === 'video_note')
+  if (hasContent && proof) {
+    const keyboard = new InlineKeyboard().text('Yuborish', `submit-homework:${homeworkId}`)
+    await ctx.reply(`“${title}” uchun material va ${proof.kind === 'voice' ? 'ovozli xabar' : 'dumaloq video'} tayyor. Yuborishni tasdiqlang.`, {
+      reply_markup: keyboard,
+    })
+  } else {
+    const missing = [
+      !hasContent ? 'kamida bitta fayl yoki matn' : '',
+      !proof ? 'kamida 3 soniyalik bitta dumaloq video yoki ovozli xabar' : '',
+    ].filter(Boolean).join(' va ')
+    await ctx.reply(`Draft saqlandi. Yuborish uchun ${missing} kerak.`)
+  }
+}
+
+async function handleUploadMessage(ctx, db) {
+  const targetHomework = await selectedHomework(ctx, db)
+  if (!targetHomework) return
+  const file = ctx.message.document || ctx.message.photo?.at(-1)
+  if (!file) return
+  if (file.file_size > 20 * 1024 * 1024) {
+    await ctx.reply('Telegram bot orqali yuboriladigan fayl 20 MB dan oshmasligi kerak. Mini App’dan 100 MB gacha yuklang.')
     return
   }
-
-  const fileName = ctx.message.document?.file_name || ''
-  const inferredType = fileName.toLowerCase().endsWith('.pdf')
-    ? 'application/pdf'
-    : /\.(jpe?g)$/i.test(fileName)
-      ? 'image/jpeg'
-      : /\.png$/i.test(fileName)
-        ? 'image/png'
-        : /\.webp$/i.test(fileName)
-          ? 'image/webp'
-          : ''
-  const allowedTypes = ['application/pdf', 'image/jpeg', 'image/png', 'image/webp', 'video/mp4', 'audio/ogg', 'audio/mpeg', 'audio/mp4']
-  const documentType = ctx.message.document?.mime_type
-  const mediaType = videoNote ? 'video/mp4' : voice ? (voice.mime_type || 'audio/ogg') : ''
-  const contentType = mediaType
-    || (ctx.message.photo
-      ? 'image/jpeg'
-      : allowedTypes.includes(documentType) ? documentType : inferredType)
-  if (!allowedTypes.includes(contentType)) {
-    await ctx.reply('Matn/fayl va bitta video yoki ovozli xabar yuborish mumkin.')
-    return
-  }
-  if (file.file_size > 10 * 1024 * 1024) {
-    await ctx.reply('Fayl hajmi 10 MB dan oshmasligi kerak.')
-    return
-  }
-
-  const fileId = file.file_id
-  const fileInfo = await ctx.api.getFile(fileId)
-  const remoteFile = fileInfo.file_path
-  if (!remoteFile) throw new Error('Telegram fayl manzili topilmadi')
-  const uploadName = fileName || remoteFile.split('/').pop() || `${Date.now()}.upload`
-  const fileUrl = `https://api.telegram.org/file/bot${token}/${remoteFile}`
-  const response = await fetch(fileUrl)
-  if (!response.ok) {
-    throw new Error('Telegram faylini yuklab olishda xatolik yuz berdi')
-  }
-
-  const r2Result = await db.uploadToR2({
-    fileStream: response.body,
-    fileName: uploadName,
-    mimeType: contentType,
+  await db.addTelegramHomeworkFile(ctx.chat.id, targetHomework.homework_id || targetHomework.id, file.file_id, {
+    name: ctx.message.document?.file_name || 'telegram-rasm.jpg',
+    mimeType: ctx.message.document?.mime_type || 'image/jpeg',
+    telegramChatId: ctx.chat.id,
+    telegramMessageId: ctx.message.message_id,
   })
-
-  await saveHomeworkSubmission(db, existing.students.id, targetHomework.homework_id || targetHomework.id, {
-    ...(videoNote ? { video_note_url: r2Result.url } : voice ? { voice_url: r2Result.url } : { file_url: r2Result.url }),
-    text_answer: '',
-    status: 'pending',
-    chat_id: chatId,
-  })
-
-  await ctx.reply(`Topshirish muvaffaqiyatli qabul qilindi.\nVazifa: ${targetHomework.title}`)
+  await replyDraftStatus(ctx, db, targetHomework.homework_id || targetHomework.id, targetHomework.title)
 }
 
 async function replyHolat(ctx, db, student, webAppUrl) {
@@ -228,6 +196,18 @@ export function registerHandlers(bot, db, webAppUrl, token) {
       await setPrivateChatMenuButton(ctx)
       const chatId = ctx.chat.id
       const payload = String(ctx.match || '').trim()
+      if (payload.startsWith('hw_')) {
+        const homeworkId = payload.slice(3)
+        const student = await requireStudent(db, chatId, ctx)
+        if (!student) return
+        const homework = await db.selectHomework(chatId, homeworkId)
+        if (!homework?.title) {
+          await ctx.reply('Uy vazifasi topilmadi yoki sizga biriktirilmagan.')
+          return
+        }
+        await ctx.reply(`“${homework.title}” uchun draft boshlandi.\nFayl yoki matn yuboring, so‘ng bitta kamida 3 soniyalik dumaloq video yoki ovozli xabar yuboring. Yakunda “Yuborish”ni bosing.`)
+        return
+      }
       if (payload) {
         const staff = payload.startsWith('login_')
         const code = staff ? payload.slice(6) : payload
@@ -273,12 +253,34 @@ export function registerHandlers(bot, db, webAppUrl, token) {
     })
   })
 
+  bot.command('savol', async (ctx) => {
+    await safeReply(ctx, async () => {
+      const student = await requireStudent(db, ctx.chat.id, ctx)
+      if (!student) return
+      const text = String(ctx.match || '').trim()
+      if (!text) {
+        await ctx.reply('Savolingizni shunday yuboring: /savol Savol matni. Fayl yoki ovozni /savol matni bilan izoh sifatida birga yuborishingiz mumkin.')
+        return
+      }
+      await db.createQuestion(ctx.chat.id, text)
+      await ctx.reply('Savolingiz qabulxonaga yuborildi. Javob shu chatga keladi.')
+    })
+  })
+
   bot.callbackQuery(/^homework:([0-9a-f-]{36})$/, async (ctx) => {
     await safeReply(ctx, async () => {
       const homeworkId = ctx.match[1]
       await db.selectHomework(ctx.chat.id, homeworkId)
       await ctx.answerCallbackQuery({ text: 'Vazifa tanlandi.' })
-      await ctx.editMessageText('Endi ushbu vazifa uchun rasm yoki PDF faylini yuboring.')
+      await ctx.editMessageText('Endi ushbu vazifa uchun istalgan fayl, matn, keyin esa kamida 3 soniyalik dumaloq video yoki ovozli xabar yuboring.')
+    })
+  })
+
+  bot.callbackQuery(/^submit-homework:([0-9a-f-]{36})$/, async (ctx) => {
+    await safeReply(ctx, async () => {
+      await db.confirmHomework(ctx.chat.id, ctx.match[1])
+      await ctx.answerCallbackQuery({ text: 'Topshiriq yuborildi.' })
+      await ctx.editMessageText('Uy vazifasi o‘qituvchiga yuborildi. Rahmat!')
     })
   })
 
@@ -323,27 +325,74 @@ export function registerHandlers(bot, db, webAppUrl, token) {
 
   bot.on('message:document', async (ctx) => {
     await safeReply(ctx, async () => {
-      await handleUploadMessage(ctx, db, token)
+      const caption = String(ctx.message.caption || '')
+      if (/^\/savol(?:@\w+)?\s+/i.test(caption)) {
+        const student = await requireStudent(db, ctx.chat.id, ctx)
+        if (!student) return
+        await db.createQuestion(ctx.chat.id, caption.replace(/^\/savol(?:@\w+)?\s+/i, '').trim(), {
+          file_id: ctx.message.document.file_id,
+          file_name: ctx.message.document.file_name || 'savol-fayli',
+          file_kind: 'attachment',
+        })
+        await ctx.reply('Savolingiz va faylingiz qabulxonaga yuborildi.')
+        return
+      }
+      await handleUploadMessage(ctx, db)
     })
   })
 
   bot.on('message:photo', async (ctx) => {
     await safeReply(ctx, async () => {
-      await handleUploadMessage(ctx, db, token)
+      const caption = String(ctx.message.caption || '')
+      if (/^\/savol(?:@\w+)?\s+/i.test(caption)) {
+        const student = await requireStudent(db, ctx.chat.id, ctx)
+        if (!student) return
+        const photo = ctx.message.photo.at(-1)
+        await db.createQuestion(ctx.chat.id, caption.replace(/^\/savol(?:@\w+)?\s+/i, '').trim(), {
+          file_id: photo.file_id,
+          file_name: 'savol-rasmi.jpg',
+          file_kind: 'attachment',
+        })
+        await ctx.reply('Savolingiz va rasmingiz qabulxonaga yuborildi.')
+        return
+      }
+      await handleUploadMessage(ctx, db)
     })
   })
 
-  bot.on('message:video_note', async (ctx) => {
-    await safeReply(ctx, async () => {
-      await handleUploadMessage(ctx, db, token)
+  for (const [messageType, proofKind] of [['voice', 'voice'], ['video_note', 'video_note']]) {
+    bot.on(`message:${messageType}`, async (ctx) => {
+      await safeReply(ctx, async () => {
+        const caption = String(ctx.message.caption || '')
+        if (proofKind === 'voice' && /^\/savol(?:@\w+)?\s+/i.test(caption)) {
+          const student = await requireStudent(db, ctx.chat.id, ctx)
+          if (!student) return
+          await db.createQuestion(ctx.chat.id, caption.replace(/^\/savol(?:@\w+)?\s+/i, '').trim(), {
+            file_id: ctx.message.voice.file_id,
+            file_name: 'savol-ovoz.ogg',
+            file_kind: 'voice',
+          })
+          await ctx.reply('Savolingiz va ovozli xabaringiz qabulxonaga yuborildi.')
+          return
+        }
+        const targetHomework = await selectedHomework(ctx, db)
+        if (!targetHomework) return
+        const proof = ctx.message[messageType]
+        if (!proof || Number(proof.duration || 0) < 3) {
+          await ctx.reply('Proof kamida 3 soniya bo‘lishi kerak. Boshqa ovozli xabar yoki dumaloq video yuboring.')
+          return
+        }
+        await db.addTelegramHomeworkFile(ctx.chat.id, targetHomework.homework_id || targetHomework.id, proof.file_id, {
+          kind: proofKind,
+          duration: proof.duration,
+          mimeType: proofKind === 'voice' ? 'audio/ogg' : 'video/mp4',
+          telegramChatId: ctx.chat.id,
+          telegramMessageId: ctx.message.message_id,
+        })
+        await replyDraftStatus(ctx, db, targetHomework.homework_id || targetHomework.id, targetHomework.title)
+      })
     })
-  })
-
-  bot.on('message:voice', async (ctx) => {
-    await safeReply(ctx, async () => {
-      await handleUploadMessage(ctx, db, token)
-    })
-  })
+  }
 
   bot.on('message:text', async (ctx) => {
     await safeReply(ctx, async () => {
@@ -370,6 +419,12 @@ export function registerHandlers(bot, db, webAppUrl, token) {
         if (text === BTN.unlink) {
           await unlinkChat(db, chatId)
           await ctx.reply(unlinked(), removeKeyboard())
+          return
+        }
+        const pending = await db.getPendingHomework(chatId)
+        if (pending) {
+          await db.addHomeworkText(chatId, pending.homework_id, text)
+          await replyDraftStatus(ctx, db, pending.homework_id, pending.title)
           return
         }
         await ctx.reply(menuText(), { reply_markup: mainKeyboard(webAppUrl) })

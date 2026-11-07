@@ -21,7 +21,7 @@ export default function OwnerDebtors() {
   const { t } = useLanguage()
   const navigate = useNavigate()
   const { pathname } = useLocation()
-  const home = pathname.startsWith('/admin') ? '/admin' : '/owner'
+  const home = pathname.startsWith('/reception') ? '/reception' : '/owner'
   const { month, year } = currentMonthYear()
   const period = `${month}/${year}`
   const [busyId, setBusyId] = useState(null)

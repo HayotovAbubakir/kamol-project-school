@@ -1,49 +1,46 @@
 import { Shield } from 'lucide-react'
 import { PageEnter } from '../../components/motion/PageMotion'
 import GlassPane from '../../components/GlassPane'
-import { useLanguage } from '../../context/LanguageContext'
+import { ROLE_PERMISSIONS, ROLES } from '../../../shared/role-permissions.js'
 
-const ROLES = [
-  {
-    roleKey: 'role.owner',
-    items: ['owner.roles.ownerAll', 'owner.roles.ownerStaff', 'owner.roles.ownerFinance', 'owner.roles.ownerRoles'],
-  },
-  {
-    roleKey: 'role.admin',
-    items: ['owner.roles.adminEducation', 'owner.roles.adminSchedule', 'owner.roles.adminFinance', 'owner.roles.adminAttendance'],
-  },
-  {
-    roleKey: 'role.reception',
-    items: [
-      'owner.roles.receptionStudents',
-      'owner.roles.receptionPayments',
-      'owner.roles.receptionAttendance',
-      'owner.roles.receptionNoFinance',
-    ],
-  },
-  {
-    roleKey: 'role.teacher',
-    items: ['owner.roles.teacherGroups', 'owner.roles.teacherAttendance', 'owner.roles.teacherSchedule'],
-  },
-]
+const ACTION_LABELS = {
+  select: 'ko‘rish',
+  insert: 'yaratish',
+  update: 'tahrirlash',
+  delete: 'o‘chirish',
+  upsert: 'saqlash',
+}
+
+function entriesFor(role) {
+  const permissions = ROLE_PERMISSIONS[role]
+  if (permissions.tables === '*') return ['Barcha jadval va amallar']
+  return Object.entries(permissions.tables).map(([table, actions]) => (
+    `${table}: ${actions.map((action) => ACTION_LABELS[action] || action).join(', ')}`
+  ))
+}
 
 export default function OwnerRoles() {
-  const { t } = useLanguage()
-
   return (
     <PageEnter>
       <div className="person-grid">
-        {ROLES.map((item) => (
-          <GlassPane key={item.roleKey} className="card" radius={22} style={{ padding: 20 }}>
-            <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginBottom: 12 }}>
-              <Shield size={18} />
-              <h3>{t(item.roleKey)}</h3>
-            </div>
-            <ul style={{ margin: 0, paddingLeft: 18, color: 'var(--muted)', display: 'grid', gap: 6 }}>
-              {item.items.map((key) => <li key={key}>{t(key)}</li>)}
-            </ul>
-          </GlassPane>
-        ))}
+        {ROLES.map((role) => {
+          const permissions = ROLE_PERMISSIONS[role]
+          const entries = entriesFor(role)
+          return (
+            <GlassPane key={role} className="card" radius={22} style={{ padding: 20 }}>
+              <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginBottom: 12 }}>
+                <Shield size={18} />
+                <h3>{permissions.label}</h3>
+              </div>
+              <h4>Ma’lumotlar va amallar</h4>
+              <ul style={{ margin: '8px 0 16px', paddingLeft: 18, color: 'var(--muted)', display: 'grid', gap: 6 }}>
+                {entries.map((entry) => <li key={entry}>{entry}</li>)}
+              </ul>
+              <p><strong>API:</strong> {permissions.endpoints === '*' ? 'Barcha endpointlar' : permissions.endpoints.join(', ') || 'Maxsus API ruxsati yo‘q'}</p>
+              <p><strong>Sahifalar:</strong> {permissions.pages === '*' ? 'Barcha sahifalar' : permissions.pages.join(', ') || 'Veb sahifaga ruxsat yo‘q'}</p>
+            </GlassPane>
+          )
+        })}
       </div>
     </PageEnter>
   )

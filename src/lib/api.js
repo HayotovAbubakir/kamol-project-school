@@ -3,6 +3,7 @@ import { currentMonthYear, todayISO, toStoredExpenseCategory } from './utils'
 import { primaryGroupTeacherId, studentMonthlyFee, validateGroupSchedule } from './store'
 import { translate } from '../i18n/runtime'
 import { normalizePhone, packParentPhones, parseParentPhones } from './phone'
+import { loginBaseFromName } from '../../shared/account-credentials.js'
 
 function requireClient() {
   if (!cloudflare) throw new Error('Cloudflare Worker API is unavailable.')
@@ -80,8 +81,8 @@ function mapStudent(row, groupIds = []) {
     phone: row.phone || '',
     parentPhone: row.parent_phone || '',
     publicCode: row.public_code || '',
-    username: row.login || '',
-    authUserId: row.auth_user_id || null,
+    username: row.login || row.username || '',
+    telegramLinked: Boolean(row.telegram_id),
     monthlyFee: 0,
     joinedAt: row.joined_at,
     groupIds,
@@ -147,13 +148,15 @@ function mapProfile(row) {
     role: row.role,
     teacherId: row.teacher_id,
     studentId: row.student_id,
+    telegramId: row.telegram_id,
+    isActive: row.is_active !== false && row.is_active !== 0,
   }
 }
 
 export async function loadAll(role = 'owner') {
   const db = requireClient()
   const isOwner = role === 'owner'
-  const isAdmin = role === 'admin'
+  const isReception = role === 'reception'
 
   const [
     profilesRes,
@@ -166,12 +169,12 @@ export async function loadAll(role = 'owner') {
     expensesRes,
     attendanceRes,
   ] = await Promise.all([
-    db.from('profiles').select('*').order('created_at'),
+    isOwner ? db.from('profiles').select('*').order('created_at') : Promise.resolve({ data: [], error: null }),
     db.from('teachers').select('*').order('created_at'),
     db.from('groups').select('*').order('created_at'),
     db.from('students').select('*').order('created_at'),
     db.from('group_students').select('*'),
-    (isOwner || isAdmin) ? db.from('payments').select('*').order('paid_at') : Promise.resolve({ data: [], error: null }),
+    (isOwner || isReception) ? db.from('payments').select('*').order('paid_at') : Promise.resolve({ data: [], error: null }),
     isOwner ? db.from('salary_payments').select('*').order('paid_at') : Promise.resolve({ data: [], error: null }),
     isOwner ? db.from('expenses').select('*').order('date', { ascending: false }) : Promise.resolve({ data: [], error: null }),
     db.from('attendance').select('*').order('date', { ascending: false }),
@@ -457,151 +460,80 @@ export async function updateGroup(id, updates, currentGroups = []) {
 }
 
 export async function addStudent(payload) {
-  const db = requireClient()
   const name = (payload.name || '').trim()
   if (!name) throw new Error(translate('domain.error.studentNameRequired'))
-
-  const groupIds = payload.groupIds || []
-  const { data, error } = await db.from('students').insert({
-    name,
-    phone: normalizePhone(payload.phone),
-    parent_phone: parentPhoneForDb(payload) ?? '',
-    monthly_fee: 0,
-    joined_at: payload.joinedAt || todayISO(),
-  }).select().single()
-  if (error) throw error
-
-  let credentials
-  try {
-    if (groupIds.length) {
-      const { error: linkError } = await db.from('group_students').insert(
-        groupIds.map((groupId) => ({ group_id: groupId, student_id: data.id })),
-      )
-      if (linkError) throw linkError
-    }
-
-    credentials = await createStudentCredentials(db, {
-      studentId: data.id,
+  const password = String(payload.password || '')
+  if (password.length < 6) throw new Error('O‘quvchi paroli kamida 6 belgidan iborat bo‘lishi kerak.')
+  const { data, error } = await requireClient().functions.invoke('students', {
+    body: {
       name,
-    })
-    const { error: accountLinkError } = await db.from('students').update({
-      login: credentials.username,
-      auth_user_id: credentials.userId,
-    }).eq('id', data.id)
-    if (accountLinkError) throw accountLinkError
-  } catch (error) {
-    await db.from('group_students').delete().eq('student_id', data.id)
-    await db.from('students').delete().eq('id', data.id)
-    throw error
-  }
-
-  return {
-    ...mapStudent({ ...data, login: credentials.username, auth_user_id: credentials.userId }, groupIds),
-    credentials: {
-      username: credentials.username,
-      password: credentials.password,
-      profileId: credentials.userId,
+      phone: normalizePhone(payload.phone),
+      parent_phone: parentPhoneForDb(payload) ?? '',
+      monthly_fee: 0,
+      joined_at: payload.joinedAt || todayISO(),
+      group_ids: payload.groupIds || [],
+      username: payload.username || loginBaseFromName(name),
+      auto_username: Boolean(payload.autoUsername),
+      password,
     },
-  }
-}
-
-function studentUsernameBase(name) {
-  const transliterated = String(name || '')
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .toLowerCase()
-    .replaceAll('ў', 'u')
-    .replaceAll('қ', 'q')
-    .replaceAll('ғ', 'g')
-    .replaceAll('ҳ', 'h')
-    .replaceAll('ш', 'sh')
-    .replaceAll('ч', 'ch')
-    .replaceAll('ё', 'yo')
-    .replaceAll('ю', 'yu')
-    .replaceAll('я', 'ya')
-    .replaceAll('ъ', '')
-    .replaceAll('ь', '')
-    .replaceAll('й', 'y')
-    .replaceAll('а', 'a')
-    .replaceAll('б', 'b')
-    .replaceAll('в', 'v')
-    .replaceAll('д', 'd')
-    .replaceAll('е', 'e')
-    .replaceAll('з', 'z')
-    .replaceAll('и', 'i')
-    .replaceAll('к', 'k')
-    .replaceAll('л', 'l')
-    .replaceAll('м', 'm')
-    .replaceAll('н', 'n')
-    .replaceAll('о', 'o')
-    .replaceAll('п', 'p')
-    .replaceAll('р', 'r')
-    .replaceAll('с', 's')
-    .replaceAll('т', 't')
-    .replaceAll('у', 'u')
-    .replaceAll('ф', 'f')
-    .replaceAll('х', 'x')
-    .replaceAll('э', 'e')
-    .replaceAll('ц', 'ts')
-    .replaceAll('ж', 'j')
-    .replace(/[^a-z0-9]/g, '')
-  return transliterated || 'student'
-}
-
-async function createStudentCredentials(db, { studentId, name }) {
-  const base = studentUsernameBase(name)
-  let username = base
-  let suffix = 1
-  while (true) {
-    const { data: existing, error } = await db.from('profiles').select('id').eq('username', username).maybeSingle()
-    if (error) throw error
-    if (!existing) break
-    username = `${base}${suffix}`
-    suffix += 1
-  }
-
-  const password = `kp${String(crypto.getRandomValues(new Uint32Array(1))[0] % 100000).padStart(5, '0')}s`
-  const user = await createLinkedAccount({
-    username,
-    password,
-    name,
-    role: 'student',
-    studentId,
   })
-  return { username, password, userId: user.id }
+  if (error) throw error
+  const student = data?.data
+  if (!student) throw new Error('O‘quvchi akkaunti yaratilmadi.')
+  return mapStudent({
+    id: student.id,
+    name: student.name,
+    phone: student.phone,
+    parent_phone: student.parent_phone,
+    public_code: student.public_code,
+    login: student.username,
+  }, student.group_ids || payload.groupIds || [])
 }
 
 export async function updateStudent(id, updates) {
-  const db = requireClient()
-  const patch = {}
+  const patch = { action: 'update' }
   if (updates.name != null) patch.name = updates.name
   if (updates.phone != null) patch.phone = normalizePhone(updates.phone)
   const parentPacked = parentPhoneForDb(updates)
   if (parentPacked !== undefined) patch.parent_phone = parentPacked
   if (updates.joinedAt != null) patch.joined_at = updates.joinedAt
-  // Oylik to‘lov guruhda — o‘quvchi yozuvida saqlanmaydi
-  patch.monthly_fee = 0
+  if (updates.username != null) patch.username = updates.username
+  if (updates.groupIds) patch.group_ids = updates.groupIds
+  const { error } = await requireClient().functions.invoke(`students/${encodeURIComponent(id)}`, { body: patch })
+  if (error) throw error
+}
 
-  if (Object.keys(patch).length) {
-    const { error } = await db.from('students').update(patch).eq('id', id)
-    if (error) throw error
-  }
+export async function revealStudentPassword(id) {
+  const { data, error } = await requireClient().functions.invoke(
+    `students/${encodeURIComponent(id)}/password/reveal`,
+    { body: {} },
+  )
+  if (error) throw error
+  if (!data?.password) throw new Error('Parolni ko‘rsatib bo‘lmadi.')
+  return data.password
+}
 
-  if (updates.groupIds) {
-    const { error: delError } = await db.from('group_students').delete().eq('student_id', id)
-    if (delError) throw delError
-    if (updates.groupIds.length) {
-      const { error: insError } = await db.from('group_students').insert(
-        updates.groupIds.map((groupId) => ({ group_id: groupId, student_id: id })),
-      )
-      if (insError) throw insError
-    }
-  }
+export async function changeStudentPassword(id, { password, username }) {
+  const { data, error } = await requireClient().functions.invoke(
+    `students/${encodeURIComponent(id)}/password`,
+    { body: { password, username } },
+  )
+  if (error) throw error
+  return data?.data
+}
+
+export async function unlinkStudentTelegram(id) {
+  const { error } = await requireClient().functions.invoke(
+    `students/${encodeURIComponent(id)}/telegram/unlink`,
+    { body: {} },
+  )
+  if (error) throw error
 }
 
 export async function resetUserCredentials(user) {
   const db = requireClient()
-  const password = `kp${String(crypto.getRandomValues(new Uint32Array(1))[0] % 100000).padStart(5, '0')}s`
+  const password = [...crypto.getRandomValues(new Uint8Array(16))]
+    .map((byte) => byte.toString(16).padStart(2, '0')).join('')
   let username = user.username || ''
   if (!username) {
     const { data, error } = await db.from('profiles').select('username').eq('id', user.id).maybeSingle()
@@ -616,26 +548,6 @@ export async function resetUserCredentials(user) {
   })
   if (error) throw new Error(error.message || 'Vaqtinchalik parolni o‘rnatib bo‘lmadi.')
   return { username, password }
-}
-
-export async function resetStudentCredentials(student, users = []) {
-  const db = requireClient()
-  const linkedUser = users.find((user) => user.studentId === student.id)
-  const userId = student.authUserId || linkedUser?.id
-  if (userId) {
-    return resetUserCredentials({
-      id: userId,
-      username: student.username || linkedUser?.username,
-    })
-  }
-
-  const credentials = await createStudentCredentials(db, { studentId: student.id, name: student.name })
-  const { error } = await db.from('students').update({
-    login: credentials.username,
-    auth_user_id: credentials.userId,
-  }).eq('id', student.id)
-  if (error) throw error
-  return { username: credentials.username, password: credentials.password }
 }
 
 export async function deleteStudent(id) {
@@ -664,12 +576,6 @@ export async function deleteGroup(id) {
   const db = requireClient()
   // Guruh o‘chadi, lekin o‘quvchi to‘lovlari (payments) o‘chmaydi — moliya tarixi saqlanadi
   const { error } = await db.from('groups').delete().eq('id', id)
-  if (error) throw error
-}
-
-export async function deletePayment(id) {
-  const db = requireClient()
-  const { error } = await db.from('payments').delete().eq('id', id)
   if (error) throw error
 }
 
@@ -729,6 +635,23 @@ export async function voidPayment(payload) {
 export async function paymentHistory(paymentId) {
   const query = paymentId ? `?payment_id=${encodeURIComponent(paymentId)}` : ''
   return paymentRequest(`/api/payments/history${query}`)
+}
+
+export async function updatePayment(id, payload) {
+  return correctPayment({
+    id,
+    amount: Number(payload.amount),
+    month: Number(payload.month),
+    year: Number(payload.year),
+    ...(payload.paidAt ? { paid_at: payload.paidAt } : {}),
+    ...(payload.method ? { method: payload.method } : {}),
+    ...(payload.note ? { note: payload.note } : {}),
+    ...(payload.reason ? { reason: payload.reason } : {}),
+  })
+}
+
+export async function deletePayment(id) {
+  return voidPayment({ id, reason: 'Egasi tomonidan bekor qilindi.' })
 }
 
 export async function addSalaryPayment(payload) {
@@ -997,18 +920,30 @@ export async function updateOwnCredentials({ username, password }) {
   return { username: uname }
 }
 
-export async function addAdminUser({ name, username, password }) {
+export async function addReceptionUser({ name, username, password }) {
+  if (String(password).length < 12) throw new Error('Qabulxona paroli kamida 12 belgidan iborat bo‘lishi kerak.')
   return createLinkedAccount({
     name,
     username,
     password,
-    role: 'admin',
+    role: 'reception',
   })
 }
 
-export async function removeAdminUser(id) {
-  const db = requireClient()
-  const { error } = await db.from('profiles').delete().eq('id', id).eq('role', 'admin')
+export async function setReceptionActive(id, isActive) {
+  const { error } = await requireClient().rpc('staff_set_user_active', {
+    target_user: id,
+    is_active: Boolean(isActive),
+  })
+  if (error) throw error
+}
+
+export async function updateReceptionUser({ id, name, username }) {
+  const { error } = await requireClient().rpc('staff_update_reception_profile', {
+    target_user: id,
+    name: String(name || '').trim(),
+    username: normalizeUsername(username),
+  })
   if (error) throw error
 }
 

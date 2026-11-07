@@ -18,5 +18,6 @@ export default defineConfig({
   test: {
     // Workers resolve grammY's web build (global fetch); tests must match it.
     alias: [{ find: /^grammy$/, replacement: 'grammy/web' }],
+    testTimeout: 20000,
   },
 })

@@ -6,11 +6,13 @@ import {
   Check,
   CheckCircle2,
   ClipboardCheck,
-  Copy,
   LogOut,
+  Mic,
+  MessageCircle,
   Plus,
   Receipt,
   RefreshCw,
+  Square,
   Users,
   Wallet,
 } from 'lucide-react'
@@ -25,26 +27,52 @@ import {
   payments as paymentData,
   reports as homeworkReports,
   salaryPayments as salaryPaymentData,
+  staff as staffData,
   students as studentData,
   teachers as teacherData,
   telegram,
 } from '../lib/data/index.js'
 import { parseParentPhones } from '../lib/phone.js'
-
-const SESSION_NOW = Date.now()
+import { loginBaseFromName } from '../../shared/account-credentials.js'
+import { canAccessEndpoint, canAccessPage } from '../../shared/role-permissions.js'
+import {
+  closeQuestionTicket,
+  createQuestionTicket,
+  declareHomeworkResult,
+  fetchHomeworkBotLink,
+  fetchHomeworkFileBlob,
+  loadHomeworkHistory,
+  loadStudentMiniAppOverview,
+  listQuestionTickets,
+  replyQuestionTicket,
+  uploadHomeworkDraftProof,
+} from './api.js'
 
 const roleLabels = {
   student: 'O‘quvchi',
   teacher: 'O‘qituvchi',
-  admin: 'Qabulxona',
   reception: 'Qabulxona',
-  owner: 'Ega',
+  owner: 'Egasi',
 }
 
 const monthLabels = [
   'Yanvar', 'Fevral', 'Mart', 'Aprel', 'May', 'Iyun',
   'Iyul', 'Avgust', 'Sentabr', 'Oktabr', 'Noyabr', 'Dekabr',
 ]
+
+const homeworkEventLabels = {
+  draft_created: 'Draft yaratildi',
+  file_added: 'Fayl yoki matn qo‘shildi',
+  proof_added: 'Proof qo‘shildi',
+  submitted: 'Yuborildi',
+  student_done: 'O‘quvchi “Bajardim” deb belgiladi',
+  student_not_done: 'O‘quvchi “Bajarolmadim” deb belgiladi',
+  teacher_done: 'O‘qituvchi “Bajardi” deb baholadi',
+  teacher_not_done: 'O‘qituvchi “Bajarmadi” deb baholadi',
+  comment: 'Izoh qo‘shildi',
+  resubmitted: 'Qayta topshirish boshlandi',
+  expired: 'Draft muddati tugadi',
+}
 
 const navItems = [
   { id: 'dashboard', label: 'Bosh sahifa', icon: BookOpen },
@@ -54,10 +82,11 @@ const navItems = [
   { id: 'management', label: 'Boshqaruv', icon: Users, staff: true },
   { id: 'reports', label: 'Hisobotlar', icon: CheckCircle2, staff: true },
   { id: 'finance', label: 'Moliya', icon: Wallet, owner: true },
+  { id: 'questions', label: 'Savollar', icon: MessageCircle, questions: true },
 ]
 
 function isStaff(role) {
-  return ['admin', 'reception', 'owner'].includes(role)
+  return canAccessPage(role, 'students') && canAccessPage(role, 'groups')
 }
 
 function formatDeadline(value) {
@@ -71,6 +100,24 @@ function formatDeadline(value) {
     minute: '2-digit',
     timeZone: 'Asia/Tashkent',
   }).format(date)
+}
+
+function formatCountdown(value, now) {
+  if (!value) return 'Muddat belgilanmagan'
+  const remaining = new Date(value).getTime() - now
+  if (!Number.isFinite(remaining)) return formatDeadline(value)
+  if (remaining <= 0) return `Muddat o‘tgan · ${formatDeadline(value)}`
+  const minutes = Math.floor(remaining / 60_000)
+  const days = Math.floor(minutes / 1440)
+  const hours = Math.floor((minutes % 1440) / 60)
+  const rest = minutes % 60
+  const countdown = days ? `${days} kun ${hours} soat` : hours ? `${hours} soat ${rest} daqiqa` : `${Math.max(1, rest)} daqiqa`
+  return `${formatDeadline(value)} · ${countdown} qoldi`
+}
+
+function isExecutableFile(file) {
+  return /\.(exe|msi|bat|cmd|com|scr|ps1|sh|js|jar|apk|dll|so|dylib|bin|elf|vbs|vbe|wsf|hta|html?|svg)$/i.test(file.original_name || '')
+    || /(?:executable|x-msdownload|javascript|text\/html|image\/svg\+xml)/i.test(file.mime_type || '')
 }
 
 function tashkentDateRange() {
@@ -102,6 +149,49 @@ function Panel({ children, className = '' }) {
   return <section className={`mini-panel rounded-3xl border p-4 ${className}`}>{children}</section>
 }
 
+function SubmissionFile({ file }) {
+  const [objectUrl, setObjectUrl] = useState('')
+  const [fileError, setFileError] = useState('')
+  const proof = file.kind === 'voice' || file.kind === 'video_note'
+  useEffect(() => {
+    if (!proof) return undefined
+    let active = true
+    let loadedUrl = ''
+    fetchHomeworkFileBlob(file).then((url) => {
+      loadedUrl = url
+      if (active) setObjectUrl(url)
+      else URL.revokeObjectURL(url)
+    }).catch((error) => {
+      if (active) setFileError(error.message || 'Media yuklanmadi.')
+    })
+    return () => {
+      active = false
+      if (loadedUrl) URL.revokeObjectURL(loadedUrl)
+    }
+  }, [file, proof])
+  const download = async () => {
+    try {
+      const url = await fetchHomeworkFileBlob({ ...file, kind: 'attachment' })
+      const link = document.createElement('a')
+      link.href = url
+      link.download = file.original_name || 'homework-file'
+      link.click()
+      window.setTimeout(() => URL.revokeObjectURL(url), 1000)
+    } catch (error) {
+      setFileError(error.message || 'Faylni yuklab bo‘lmadi.')
+    }
+  }
+  return (
+    <div className="mt-3 grid gap-2">
+      {proof ? file.kind === 'voice'
+        ? objectUrl ? <audio controls src={objectUrl} className="w-full" /> : <p className="text-xs text-[var(--mini-muted)]">Ovoz yuklanmoqda…</p>
+        : objectUrl ? <video controls playsInline src={objectUrl} className="max-h-64 w-full rounded-xl" /> : <p className="text-xs text-[var(--mini-muted)]">Video yuklanmoqda…</p>
+        : <button type="button" className="mini-link break-all text-left" onClick={download}>{file.original_name || 'Fayl'} · yuklab olish</button>}
+      {fileError && <p role="alert" className="text-xs text-rose-300">{fileError}</p>}
+    </div>
+  )
+}
+
 function ActionButton({ children, className = '', ...props }) {
   const { onClick, type, ...buttonProps } = props
   const handleClick = (event) => {
@@ -120,11 +210,16 @@ function ActionButton({ children, className = '', ...props }) {
   )
 }
 
-function TaskCard({ task, teacher, onClick }) {
+function TaskCard({ task, teacher, now, onClick }) {
   const submissions = task.submissions || []
   const status = task.submission?.status
-  const overdue = !status && task.due_at && new Date(task.due_at).getTime() < SESSION_NOW
-  const statusText = status === 'approved' ? 'Bajardi' : status === 'rejected' ? 'Bajarmadi' : status === 'pending' ? 'Tekshirilmoqda' : overdue ? 'Topshirilmadi' : 'Yangi'
+  const isPastDue = task.due_at && new Date(task.due_at).getTime() < now
+  const statusText = task.submission?.state === 'draft'
+    ? 'Draft · proof kutilmoqda'
+    : task.submission?.state === 'expired' && isPastDue ? 'Topshirilmadi'
+      : task.submission?.state === 'expired' ? 'Draft muddati tugagan'
+    : status === 'approved' ? 'Bajardi' : status === 'rejected' ? 'Qayta topshirish kerak'
+      : status === 'pending' ? 'Tekshirilmoqda' : isPastDue ? 'Topshirilmadi' : 'Yangi'
 
   return (
     <button type="button" className="task-card w-full rounded-3xl border p-4 text-left" onClick={onClick}>
@@ -139,7 +234,7 @@ function TaskCard({ task, teacher, onClick }) {
         </div>
       </div>
       <div className="mt-4 flex items-center justify-between border-t border-[var(--mini-border)] pt-3 text-xs">
-        <span className="text-[var(--mini-muted)]">{formatDeadline(task.due_at)}</span>
+        <span className="text-[var(--mini-muted)]">{formatCountdown(task.due_at, now)}</span>
         <span className="font-semibold text-[var(--mini-accent)]">
           {teacher ? `${submissions.filter((item) => item.status === 'pending').length} ta tekshirilmagan` : statusText}
         </span>
@@ -153,6 +248,7 @@ export default function MainApp() {
   const [page, setPage] = useState('dashboard')
   const [selectedId, setSelectedId] = useState(null)
   const [homeworks, setHomeworks] = useState([])
+  const [homeworkHistory, setHomeworkHistory] = useState({ events: [], submissions: [] })
   const [groups, setGroups] = useState([])
   const [students, setStudents] = useState([])
   const [teachers, setTeachers] = useState([])
@@ -167,14 +263,26 @@ export default function MainApp() {
   const [notice, setNotice] = useState('')
   const [studentSearch, setStudentSearch] = useState('')
   const [authLoading, setAuthLoading] = useState(true)
+  const [telegramLoginRequired, setTelegramLoginRequired] = useState(false)
+  const [telegramLoginForm, setTelegramLoginForm] = useState({ username: '', password: '' })
+  const [now, setNow] = useState(() => Date.now())
   const [busy, setBusy] = useState(false)
   const [createForm, setCreateForm] = useState({ groupId: '', title: '', description: '', deadline: '', file: null })
-  const [submissionForm, setSubmissionForm] = useState({ text: '', file: null })
-  const [submissionPreview, setSubmissionPreview] = useState('')
-  const previewUrl = useRef('')
-  const [studentForm, setStudentForm] = useState({ name: '', phone: '', fatherPhone: '', motherPhone: '', groupId: '' })
+  const [submissionForm, setSubmissionForm] = useState({ text: '', files: [] })
+  const [recording, setRecording] = useState(false)
+  const [recordedProof, setRecordedProof] = useState(null)
+  const [recordedProofDuration, setRecordedProofDuration] = useState(0)
+  const [submissionBotLink, setSubmissionBotLink] = useState('')
+  const [studentForm, setStudentForm] = useState({ name: '', phone: '', fatherPhone: '', motherPhone: '', groupId: '', username: '', password: '', autoUsername: true })
   const [editingStudentId, setEditingStudentId] = useState(null)
-  const [teacherForm, setTeacherForm] = useState({ name: '', phone: '', monthlySalary: '' })
+  const [studentPasswordForm, setStudentPasswordForm] = useState({ studentId: '', username: '', password: '' })
+  const [revealedStudentPasswords, setRevealedStudentPasswords] = useState({})
+  const studentPasswordTimers = useRef({})
+  const [staffRows, setStaffRows] = useState([])
+  const [staffForm, setStaffForm] = useState({ name: '', phone: '', role: 'reception', username: '', password: '' })
+  const [editingStaffId, setEditingStaffId] = useState(null)
+  const [staffUsernameAuto, setStaffUsernameAuto] = useState(true)
+  const [teacherForm, setTeacherForm] = useState({ name: '', phone: '', monthlySalary: '', username: '', password: '', autoUsername: true })
   const [editingTeacherId, setEditingTeacherId] = useState(null)
   const [groupForm, setGroupForm] = useState({ name: '', teacherId: '', monthlyFee: '', schedule: [{ day: '0', startTime: '', endTime: '' }] })
   const [editingGroupId, setEditingGroupId] = useState(null)
@@ -182,17 +290,40 @@ export default function MainApp() {
   const [attendanceForm, setAttendanceForm] = useState({ studentId: '', groupId: '', status: 'present', note: '' })
   const [expenseForm, setExpenseForm] = useState({ title: '', amount: '', category: 'Operatsion' })
   const [salaryForm, setSalaryForm] = useState({ teacherId: '', amount: '' })
-  const [credentials, setCredentials] = useState(null)
   const [inviteLinks, setInviteLinks] = useState({})
   const [feedbacks, setFeedbacks] = useState({})
+  const [reviewStatusFilter, setReviewStatusFilter] = useState('all')
+  const [reviewStudentFilter, setReviewStudentFilter] = useState('')
+  const [questionTickets, setQuestionTickets] = useState([])
+  const [questionStatus, setQuestionStatus] = useState('')
+  const [questionSearch, setQuestionSearch] = useState('')
+  const [questionText, setQuestionText] = useState('')
+  const [questionFile, setQuestionFile] = useState(null)
+  const [questionReply, setQuestionReply] = useState({})
   const [copied, setCopied] = useState(false)
   const touchStartY = useRef(null)
+  const reviewLinkHandled = useRef(false)
+  const mediaRecorder = useRef(null)
+  const recordingStream = useRef(null)
+  const recordingStartedAt = useRef(0)
+  const recordingChunks = useRef([])
 
   const role = user?.role
   const teacher = role === 'teacher'
   const student = role === 'student'
   const privileged = isStaff(role)
   const selectedHomework = homeworks.find((item) => item.id === selectedId) || null
+  const selectedHomeworkHasProof = selectedHomework?.submission?.files?.some((file) => ['voice', 'video_note'].includes(file.kind)) || false
+  const selectedHomeworkSubmissionLocked = selectedHomework?.submission?.state === 'submitted'
+    || (selectedHomework?.submission?.state === 'checked' && selectedHomework.submission.teacher_result === 'done')
+  const filteredReviewSubmissions = (selectedHomework?.submissions || []).filter((submission) => {
+    const matchesStatus = reviewStatusFilter === 'all'
+      || (reviewStatusFilter === 'pending' && submission.state === 'submitted')
+      || (reviewStatusFilter === 'done' && submission.teacher_result === 'done')
+      || (reviewStatusFilter === 'not_done' && submission.teacher_result === 'not_done')
+    const studentName = submission.student_name || submission.students?.name || ''
+    return matchesStatus && studentName.toLowerCase().includes(reviewStudentFilter.trim().toLowerCase())
+  })
   const monthStart = new Date(`${tashkentDateRange().from}T00:00:00+05:00`)
   const thisMonthSubmissions = homeworks.filter((task) => (
     task.submission?.submitted_at && new Date(task.submission.submitted_at) >= monthStart
@@ -202,13 +333,28 @@ export default function MainApp() {
     if (!profile) return
     setLoading(true)
     setError('')
+    setRevealedStudentPasswords({})
+    Object.values(studentPasswordTimers.current).forEach((timer) => window.clearTimeout(timer))
+    studentPasswordTimers.current = {}
     try {
-      const tasks = await homeworkData.list(profile)
+      let tasks
+      let paymentRows
+      let attendanceRows
+      if (profile.role === 'student') {
+        const overview = await loadStudentMiniAppOverview()
+        tasks = overview.homeworks
+        paymentRows = overview.payments
+        attendanceRows = overview.attendance
+      } else {
+        tasks = await homeworkData.list(profile)
+        const staffDataRows = await Promise.all([
+          paymentData.list(profile),
+          attendanceData.list(profile),
+        ])
+        paymentRows = staffDataRows[0]
+        attendanceRows = staffDataRows[1]
+      }
       setHomeworks(tasks)
-      const [paymentRows, attendanceRows] = await Promise.all([
-        paymentData.list(profile),
-        attendanceData.list(profile),
-      ])
       setPayments(paymentRows)
       setAttendance(attendanceRows)
       if (profile.role === 'teacher' || isStaff(profile.role)) {
@@ -228,6 +374,7 @@ export default function MainApp() {
         ])
         setExpenses(expenseRows)
         setSalaryPayments(salaryRows)
+        setStaffRows(await staffData.list())
         const { from, to } = tashkentDateRange()
         setFinanceSummary(await finance.summary(from, to))
       }
@@ -239,6 +386,23 @@ export default function MainApp() {
   }, [])
 
   useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 60_000)
+    return () => window.clearInterval(timer)
+  }, [])
+
+  useEffect(() => () => {
+    if (mediaRecorder.current) {
+      mediaRecorder.current.onstop = null
+      if (mediaRecorder.current.state !== 'inactive') mediaRecorder.current.stop()
+    }
+    recordingStream.current?.getTracks().forEach((track) => track.stop())
+  }, [])
+
+  useEffect(() => () => {
+    Object.values(studentPasswordTimers.current).forEach((timer) => window.clearTimeout(timer))
+  }, [])
+
+  useEffect(() => {
     let active = true
     async function authenticate() {
       try {
@@ -247,9 +411,12 @@ export default function MainApp() {
           ? { data: { user: data.session.user }, error: null }
           : await auth.signInWithTelegram()
         if (result.error) {
-          if (active) setError(result.error.code === 'TELEGRAM_NOT_LINKED'
-            ? 'Telegram akkauntingiz hali tizimga ulanmagan. Qabulxonadan bir martalik ulash havolasini oling.'
-            : result.error.message)
+          if (active) {
+            setTelegramLoginRequired(result.error.code === 'TELEGRAM_NOT_LINKED')
+            setError(result.error.code === 'TELEGRAM_NOT_LINKED'
+              ? 'Telegram akkauntingiz ulanmagan. Login va parol bilan kiring.'
+              : result.error.message)
+          }
           return
         }
         const profile = result.data.user
@@ -267,6 +434,26 @@ export default function MainApp() {
     authenticate()
     return () => { active = false }
   }, [refresh])
+
+  async function loginWithTelegramPassword(event) {
+    event.preventDefault()
+    setBusy(true)
+    setError('')
+    try {
+      const result = await auth.signInWithTelegramCredentials(telegramLoginForm)
+      if (result.error) throw result.error
+      const profile = result.data.user
+      const nextProfile = { ...profile, teacherId: profile.teacher_id, mustResetPassword: Boolean(profile.must_reset_password) }
+      setTelegramLoginRequired(false)
+      setTelegramLoginForm({ username: '', password: '' })
+      setUser(nextProfile)
+      await refresh(nextProfile)
+    } catch (loginError) {
+      setError(loginError.message || 'Login yoki parol noto‘g‘ri.')
+    } finally {
+      setBusy(false)
+    }
+  }
 
   useEffect(() => {
     const app = window.Telegram?.WebApp
@@ -286,12 +473,40 @@ export default function MainApp() {
   }, [])
 
   useEffect(() => {
+    if (!teacher || !homeworks.length || reviewLinkHandled.current) return
+    const reviewId = new URLSearchParams(window.location.search).get('review')
+    if (!reviewId) return
+    const task = homeworks.find((item) => item.submissions?.some((submission) => submission.id === reviewId))
+    if (!task) return
+    queueMicrotask(() => {
+      reviewLinkHandled.current = true
+      setSelectedId(task.id)
+      setPage('detail')
+      const url = new URL(window.location.href)
+      url.searchParams.delete('review')
+      window.history.replaceState({}, '', url)
+    })
+  }, [teacher, homeworks])
+
+  useEffect(() => {
+    if (page !== 'detail' || !selectedHomework || !user) return
+    let active = true
+    loadHomeworkHistory(selectedHomework.id).then((history) => {
+      if (active) setHomeworkHistory(history)
+    }).catch((historyError) => {
+      if (active) setError(historyError.message || 'Vazifa tarixini yuklab bo‘lmadi.')
+    })
+    return () => { active = false }
+  }, [page, selectedHomework, user])
+
+  useEffect(() => {
     const app = window.Telegram?.WebApp
     if (!app || !app.isVersionAtLeast?.('6.1')) return undefined
     const onBack = () => setPage('dashboard')
     const formId = page === 'management'
       ? editingGroupId ? 'mini-group-form' : editingTeacherId ? 'mini-teacher-form' : 'mini-student-form'
-      : page === 'homework' && student && selectedHomework && !['pending', 'approved'].includes(selectedHomework.submission?.status)
+      : page === 'detail' && student && selectedHomework
+        && !selectedHomeworkSubmissionLocked
         ? 'mini-submission-form'
         : null
     const onMainClick = () => document.getElementById(formId)?.requestSubmit()
@@ -314,11 +529,7 @@ export default function MainApp() {
       app.MainButton?.offClick(onMainClick)
       app.MainButton?.hide()
     }
-  }, [page, student, selectedHomework, editingStudentId, editingTeacherId, editingGroupId])
-
-  useEffect(() => () => {
-    if (previewUrl.current) URL.revokeObjectURL(previewUrl.current)
-  }, [])
+  }, [page, student, selectedHomework, selectedHomeworkSubmissionLocked, editingStudentId, editingTeacherId, editingGroupId])
 
   useEffect(() => {
     if (!user) return undefined
@@ -330,9 +541,24 @@ export default function MainApp() {
   }, [refresh, user])
 
   const visibleNav = useMemo(
-    () => navItems.filter((item) => (!item.staff || privileged) && (!item.owner || role === 'owner')),
+    () => navItems.filter((item) => (!item.staff || privileged)
+      && (!item.owner || canAccessPage(role, 'finance'))
+      && (!item.questions || canAccessPage(role, 'questions'))),
     [privileged, role],
   )
+
+  const refreshQuestions = useCallback(async () => {
+    try {
+      setError('')
+      setQuestionTickets(await listQuestionTickets(questionStatus, questionSearch))
+    } catch (loadError) {
+      setError(loadError.message || 'Savollarni yuklab bo‘lmadi.')
+    }
+  }, [questionStatus, questionSearch])
+
+  useEffect(() => {
+    if (page === 'questions' && user) queueMicrotask(() => refreshQuestions())
+  }, [page, user, refreshQuestions])
 
   async function logout() {
     await auth.signOut()
@@ -374,12 +600,17 @@ export default function MainApp() {
     setBusy(true)
     setError('')
     try {
-      await homeworkData.submit(user, selectedHomework, submissionForm)
-      if (previewUrl.current) URL.revokeObjectURL(previewUrl.current)
-      previewUrl.current = ''
-      setSubmissionPreview('')
-      setSubmissionForm({ text: '', file: null, videoNote: null })
-      setNotice('Vazifa muvaffaqiyatli topshirildi.')
+      const draft = await homeworkData.submit(user, selectedHomework, submissionForm)
+      if (recordedProof) {
+        await uploadHomeworkDraftProof(draft.id, recordedProof, recordedProofDuration)
+        setRecordedProof(null)
+        setRecordedProofDuration(0)
+      }
+      setSubmissionBotLink(await fetchHomeworkBotLink(selectedHomework.id))
+      setSubmissionForm({ text: '', files: [] })
+      setNotice(recordedProof
+        ? 'Draft va ovozli proof saqlandi. Botda “Yuborish”ni tasdiqlang.'
+        : 'Draft saqlandi. Dumaloq video yoki golos xabar yuborib, botda “Yuborish”ni tasdiqlang.')
       await refresh(user)
     } catch (submitError) {
       setError(submitError.message || 'Vazifani topshirib bo‘lmadi.')
@@ -388,27 +619,58 @@ export default function MainApp() {
     }
   }
 
-  function chooseSubmissionFile(file) {
+  function chooseSubmissionFiles(files) {
     setError('')
-    if (!file) {
-      if (previewUrl.current) URL.revokeObjectURL(previewUrl.current)
-      previewUrl.current = ''
-      setSubmissionPreview('')
-      setSubmissionForm((current) => ({ ...current, file: null }))
+    const selectedFiles = [...(files || [])]
+    if (selectedFiles.some((file) => file.size <= 0 || file.size > 100 * 1024 * 1024)) {
+      setError('Har bir fayl 100 MB dan oshmasligi kerak.')
       return
     }
-    if (file.size <= 0 || file.size > 10 * 1024 * 1024) {
-      setError('Fayl hajmi 10 MB dan oshmasligi kerak.')
+    setSubmissionForm((current) => ({ ...current, files: selectedFiles }))
+  }
+
+  async function toggleVoiceRecording() {
+    if (mediaRecorder.current?.state === 'recording') {
+      mediaRecorder.current.stop()
+      setRecording(false)
       return
     }
-    if (!['application/pdf', 'image/jpeg', 'image/png', 'image/webp'].includes(file.type)) {
-      setError('Faqat PDF, JPG, PNG yoki WebP fayl yuborish mumkin.')
+    if (typeof window.MediaRecorder !== 'function' || !navigator.mediaDevices?.getUserMedia) {
+      setError('Bu qurilmada ilova ichida ovoz yozib bo‘lmaydi. Telegram bot orqali proof yuboring.')
       return
     }
-    if (previewUrl.current) URL.revokeObjectURL(previewUrl.current)
-    previewUrl.current = URL.createObjectURL(file)
-    setSubmissionPreview(previewUrl.current)
-    setSubmissionForm((current) => ({ ...current, file }))
+    try {
+      setError('')
+      setRecordedProof(null)
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      const recorder = new window.MediaRecorder(stream)
+      recordingStream.current = stream
+      recordingChunks.current = []
+      recordingStartedAt.current = Date.now()
+      recorder.ondataavailable = (event) => {
+        if (event.data.size) recordingChunks.current.push(event.data)
+      }
+      recorder.onstop = () => {
+        stream.getTracks().forEach((track) => track.stop())
+        recordingStream.current = null
+        mediaRecorder.current = null
+        const duration = Math.floor((Date.now() - recordingStartedAt.current) / 1000)
+        if (duration < 3) {
+          setError('Ovozli proof kamida 3 soniya bo‘lishi kerak.')
+          return
+        }
+        setRecordedProof(new Blob(recordingChunks.current, { type: recorder.mimeType || 'audio/webm' }))
+        setRecordedProofDuration(duration)
+        setNotice(`Ovozli proof yozildi (${duration} soniya). Draftni saqlang.`)
+      }
+      mediaRecorder.current = recorder
+      recorder.start()
+      setRecording(true)
+    } catch (recordError) {
+      recordingStream.current?.getTracks().forEach((track) => track.stop())
+      recordingStream.current = null
+      setError(recordError.message || 'Mikrofonga ruxsat berilmadi. Telegram bot orqali proof yuboring.')
+    }
   }
 
   async function saveReview(submission, status) {
@@ -425,6 +687,69 @@ export default function MainApp() {
     }
   }
 
+  async function markStudentResult(submissionId, result) {
+    setBusy(true)
+    setError('')
+    try {
+      await declareHomeworkResult(submissionId, result)
+      setNotice(result === 'done' ? '“Bajardim” belgisi saqlandi.' : '“Bajarolmadim” belgisi saqlandi.')
+      await refresh(user)
+    } catch (declarationError) {
+      setError(declarationError.message || 'Natijani saqlab bo‘lmadi.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function sendQuestion(event) {
+    event.preventDefault()
+    if (!questionText.trim()) return
+    setBusy(true)
+    setError('')
+    try {
+      await createQuestionTicket(questionText.trim(), '', questionFile)
+      setQuestionText('')
+      setQuestionFile(null)
+      setNotice('Savolingiz yuborildi. Javob Mini App va Telegram botga keladi.')
+      await refreshQuestions()
+    } catch (questionError) {
+      setError(questionError.message || 'Savol yuborilmadi.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function sendQuestionReply(ticket) {
+    const text = String(questionReply[ticket.id] || '').trim()
+    if (!text) return
+    setBusy(true)
+    setError('')
+    try {
+      await replyQuestionTicket(ticket.id, text)
+      setQuestionReply((current) => ({ ...current, [ticket.id]: '' }))
+      setNotice('Javob o‘quvchiga yuborildi.')
+      await refreshQuestions()
+    } catch (replyError) {
+      setError(replyError.message || 'Javob yuborilmadi.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function closeQuestion(ticket) {
+    setBusy(true)
+    setError('')
+    try {
+      await closeQuestionTicket(ticket.id)
+      setNotice('Savol yopildi.')
+      await refreshQuestions()
+    } catch (closeError) {
+      setError(closeError.message || 'Savolni yopib bo‘lmadi.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
   async function saveStudent(event) {
     event.preventDefault()
     setBusy(true)
@@ -434,27 +759,77 @@ export default function MainApp() {
         await studentData.update(editingStudentId, {
           name: studentForm.name,
           phone: studentForm.phone,
+          username: studentForm.username,
           fatherPhone: studentForm.fatherPhone,
           motherPhone: studentForm.motherPhone,
         })
         setEditingStudentId(null)
         setNotice('O‘quvchi ma’lumotlari yangilandi.')
       } else {
-        const created = await studentData.create({
+        await studentData.create({
           name: studentForm.name,
           phone: studentForm.phone,
+          username: studentForm.username || loginBaseFromName(studentForm.name),
+          autoUsername: studentForm.autoUsername,
+          password: studentForm.password,
           fatherPhone: studentForm.fatherPhone,
           motherPhone: studentForm.motherPhone,
           groupIds: studentForm.groupId ? [studentForm.groupId] : [],
         })
-        setCredentials(created.credentials)
         setInviteLinks({})
-        setNotice('O‘quvchi va uning akkaunti yaratildi.')
+        setNotice('O‘quvchi Mini App akkaunti yaratildi.')
       }
-      setStudentForm({ name: '', phone: '', fatherPhone: '', motherPhone: '', groupId: '' })
+      setStudentForm({ name: '', phone: '', fatherPhone: '', motherPhone: '', groupId: '', username: '', password: '', autoUsername: true })
       await refresh(user)
     } catch (createError) {
       setError(createError.message || 'O‘quvchini yaratib bo‘lmadi.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function revealStudentPassword(item) {
+    try {
+      const password = await studentData.revealPassword(item.id)
+      setRevealedStudentPasswords((current) => ({ ...current, [item.id]: password }))
+      if (studentPasswordTimers.current[item.id]) window.clearTimeout(studentPasswordTimers.current[item.id])
+      studentPasswordTimers.current[item.id] = window.setTimeout(() => {
+        setRevealedStudentPasswords((current) => {
+          const next = { ...current }
+          delete next[item.id]
+          return next
+        })
+      }, 8000)
+    } catch (revealError) {
+      setError(revealError.message || 'Parolni ko‘rsatib bo‘lmadi.')
+    }
+  }
+
+  async function changeStudentCredentials(event) {
+    event.preventDefault()
+    setBusy(true)
+    setError('')
+    try {
+      await studentData.changePassword(studentPasswordForm.studentId, studentPasswordForm.password, studentPasswordForm.username)
+      setStudentPasswordForm({ studentId: '', username: '', password: '' })
+      setNotice('O‘quvchi login va paroli yangilandi.')
+      await refresh(user)
+    } catch (passwordError) {
+      setError(passwordError.message || 'Parolni o‘zgartirib bo‘lmadi.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function unlinkStudent(item) {
+    setBusy(true)
+    setError('')
+    try {
+      await studentData.unlinkTelegram(item.id)
+      setNotice('Telegram akkaunti uzildi.')
+      await refresh(user)
+    } catch (unlinkError) {
+      setError(unlinkError.message || 'Telegram akkauntini uzib bo‘lmadi.')
     } finally {
       setBusy(false)
     }
@@ -465,34 +840,94 @@ export default function MainApp() {
     setBusy(true)
     setError('')
     try {
-      const base = teacherForm.name.normalize('NFD').replace(/[\u0300-\u036f]/g, '')
-        .toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 24) || 'teacher'
-      const suffix = [...crypto.getRandomValues(new Uint8Array(4))]
-        .map((value) => value.toString(16).padStart(2, '0')).join('')
-      const password = [...crypto.getRandomValues(new Uint8Array(16))]
-        .map((value) => value.toString(16).padStart(2, '0')).join('')
       if (editingTeacherId) {
-        await teacherData.update(editingTeacherId, {
-          name: teacherForm.name,
-          phone: teacherForm.phone,
-          monthlySalary: teacherForm.monthlySalary,
-        })
+        const account = staffRows.find((item) => item.teacher_id === editingTeacherId)
+        if (account) {
+          await staffData.update(account.id, {
+            name: teacherForm.name,
+            phone: teacherForm.phone,
+            role: 'teacher',
+            username: teacherForm.username,
+            ...(teacherForm.password ? { password: teacherForm.password } : {}),
+            monthly_salary: Number(teacherForm.monthlySalary || 0),
+          })
+        } else {
+          if (teacherForm.password.length < 12) throw new Error('Xodim paroli kamida 12 belgidan iborat bo‘lishi kerak.')
+          await staffData.create({
+            name: teacherForm.name,
+            phone: teacherForm.phone,
+            role: 'teacher',
+            teacher_id: editingTeacherId,
+            username: teacherForm.username,
+            auto_username: teacherForm.autoUsername,
+            password: teacherForm.password,
+            monthly_salary: Number(teacherForm.monthlySalary || 0),
+          })
+        }
         setEditingTeacherId(null)
       } else {
-        const created = await teacherData.create({
-          ...teacherForm,
-          username: `${base}${suffix}`,
-          password,
+        if (teacherForm.password.length < 12) throw new Error('Xodim paroli kamida 12 belgidan iborat bo‘lishi kerak.')
+        await staffData.create({
+          name: teacherForm.name,
+          phone: teacherForm.phone,
+          role: 'teacher',
+          username: teacherForm.username,
+          auto_username: teacherForm.autoUsername,
+          password: teacherForm.password,
+          monthly_salary: Number(teacherForm.monthlySalary || 0),
         })
-        if (created.loginError) throw new Error(created.loginError)
-        const linkedTeacher = (await teacherData.list()).find((item) => item.id === created.id)
-        if (linkedTeacher?.profile_id) await createInvite(linkedTeacher.profile_id)
       }
-      setTeacherForm({ name: '', phone: '', monthlySalary: '' })
+      setTeacherForm({ name: '', phone: '', monthlySalary: '', username: '', password: '', autoUsername: true })
+      setStaffRows(await staffData.list())
       await refresh(user)
-      setNotice(editingTeacherId ? 'O‘qituvchi ma’lumotlari yangilandi.' : 'O‘qituvchi qo‘shildi. Telegram ulash havolasi yaratildi.')
+      setNotice(editingTeacherId ? 'O‘qituvchi ma’lumotlari yangilandi.' : 'O‘qituvchi akkaunti yaratildi.')
     } catch (createError) {
       setError(createError.message || 'O‘qituvchini qo‘shib bo‘lmadi.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function saveStaff(event) {
+    event.preventDefault()
+    setBusy(true)
+    setError('')
+    try {
+      if (editingStaffId) {
+        await staffData.update(editingStaffId, {
+          name: staffForm.name,
+          phone: staffForm.phone,
+          username: staffForm.username,
+          role: staffForm.role,
+          ...(staffForm.password ? { password: staffForm.password } : {}),
+        })
+      } else {
+        if (staffForm.password.length < 12) throw new Error('Xodim paroli kamida 12 belgidan iborat bo‘lishi kerak.')
+        await staffData.create({
+          ...staffForm,
+          auto_username: staffUsernameAuto,
+        })
+      }
+      setStaffForm({ name: '', phone: '', role: 'reception', username: '', password: '' })
+      setStaffUsernameAuto(true)
+      setEditingStaffId(null)
+      setStaffRows(await staffData.list())
+      setNotice('Xodim akkaunti saqlandi.')
+    } catch (staffError) {
+      setError(staffError.message || 'Xodim akkauntini saqlab bo‘lmadi.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function toggleStaffActive(item) {
+    setBusy(true)
+    setError('')
+    try {
+      await staffData.update(item.id, { is_active: !item.is_active })
+      setStaffRows(await staffData.list())
+    } catch (staffError) {
+      setError(staffError.message || 'Xodim holatini o‘zgartirib bo‘lmadi.')
     } finally {
       setBusy(false)
     }
@@ -536,6 +971,9 @@ export default function MainApp() {
     setStudentForm({
       name: item.name || '',
       phone: item.phone || '',
+      username: item.login || '',
+      password: '',
+      autoUsername: false,
       ...parentPhones,
       groupId: '',
     })
@@ -547,10 +985,14 @@ export default function MainApp() {
     setEditingTeacherId(item.id)
     setEditingStudentId(null)
     setEditingGroupId(null)
+    const account = staffRows.find((row) => row.teacher_id === item.id)
     setTeacherForm({
       name: item.name || '',
       phone: item.phone || '',
       monthlySalary: String(item.monthlySalary || ''),
+      username: account?.username || loginBaseFromName(item.name),
+      password: '',
+      autoUsername: !account,
     })
     setError('')
     setNotice('')
@@ -686,16 +1128,18 @@ export default function MainApp() {
     }
   }
 
-  async function createInvite(profileId) {
-    if (!profileId) {
-      setError('Foydalanuvchi akkaunti topilmadi.')
+  async function createInvite(target) {
+    const inviteTarget = typeof target === 'string' ? { profileId: target } : target
+    if (!inviteTarget || (!inviteTarget.profileId && !inviteTarget.studentId)) {
+      setError('Foydalanuvchi tanlanmagan.')
       return
     }
     setBusy(true)
     setError('')
     try {
-      const invite = await telegram.createInvite(profileId)
-      setInviteLinks((current) => ({ ...current, [profileId]: invite.invite_url }))
+      const invite = await telegram.createInvite(inviteTarget.profileId || { studentId: inviteTarget.studentId })
+      const key = inviteTarget.profileId || inviteTarget.studentId
+      setInviteLinks((current) => ({ ...current, [key]: invite.invite_url }))
       setNotice('Telegram ulash havolasi 15 daqiqa davomida amal qiladi.')
     } catch (inviteError) {
       setError(inviteError.message || 'Ulash havolasini yaratib bo‘lmadi.')
@@ -714,14 +1158,23 @@ export default function MainApp() {
             <p className="mt-1 text-sm text-[var(--mini-muted)]">O‘quv markazi — shaxsiy kabinet</p>
           </header>
           <Panel>
-            <h2 className="text-lg font-bold">{authLoading ? 'Telegram tekshirilmoqda…' : 'Telegram orqali kirish'}</h2>
+            <h2 className="text-lg font-bold">{authLoading ? 'Telegram tekshirilmoqda…' : telegramLoginRequired ? 'Kirish' : 'Telegram orqali kirish'}</h2>
             <p className="mt-2 text-sm leading-relaxed text-[var(--mini-muted)]">
               {authLoading
                 ? 'Xavfsiz ulanish bir necha soniya olishi mumkin.'
-                : 'Ushbu ilovani Telegram ichidan oching. Akkauntingiz ulanmagan bo‘lsa, qabulxonadan ulash havolasini oling.'}
+                : telegramLoginRequired
+                  ? 'Telegram akkauntingizni login va parol orqali bir marta ulang. Keyingi safar avtomatik kirasiz.'
+                  : 'Ushbu ilovani Telegram ichidan oching.'}
             </p>
             {error && <p role="alert" className="mini-error mt-4">{error}</p>}
-            {!authLoading && (
+            {!authLoading && telegramLoginRequired && (
+              <form className="mt-4 grid gap-3" onSubmit={loginWithTelegramPassword}>
+                <label className="mini-field"><span>Login</span><input autoComplete="username" value={telegramLoginForm.username} onChange={(event) => setTelegramLoginForm({ ...telegramLoginForm, username: event.target.value })} required /></label>
+                <label className="mini-field"><span>Parol</span><input type="password" autoComplete="current-password" value={telegramLoginForm.password} onChange={(event) => setTelegramLoginForm({ ...telegramLoginForm, password: event.target.value })} minLength={6} required /></label>
+                <ActionButton type="submit" className="w-full" disabled={busy}>{busy ? 'Tekshirilmoqda…' : 'Kirish'}</ActionButton>
+              </form>
+            )}
+            {!authLoading && !telegramLoginRequired && (
               <ActionButton className="mt-4 w-full" onClick={() => window.location.reload()}>
                 Qayta urinish
               </ActionButton>
@@ -735,6 +1188,9 @@ export default function MainApp() {
   const navTo = (nextPage) => {
     setError('')
     setNotice('')
+    setRevealedStudentPasswords({})
+    Object.values(studentPasswordTimers.current).forEach((timer) => window.clearTimeout(timer))
+    studentPasswordTimers.current = {}
     setPage(nextPage)
   }
 
@@ -893,7 +1349,7 @@ export default function MainApp() {
                   <label className="mini-field"><span>Sarlavha</span><input value={createForm.title} onChange={(event) => setCreateForm({ ...createForm, title: event.target.value })} required /></label>
                   <label className="mini-field"><span>Izoh</span><textarea rows="3" value={createForm.description} onChange={(event) => setCreateForm({ ...createForm, description: event.target.value })} /></label>
                   <label className="mini-field"><span>Muddat</span><input type="datetime-local" value={createForm.deadline} onChange={(event) => setCreateForm({ ...createForm, deadline: event.target.value })} /></label>
-                  <label className="mini-field"><span>Fayl (PDF yoki rasm, 10 MB gacha)</span><input type="file" accept="application/pdf,image/jpeg,image/png,image/webp" onChange={(event) => setCreateForm({ ...createForm, file: event.target.files?.[0] || null })} /></label>
+                  <label className="mini-field"><span>Fayl (har qanday tur, 100 MB gacha)</span><input type="file" onChange={(event) => setCreateForm({ ...createForm, file: event.target.files?.[0] || null })} /></label>
                   <div className="flex gap-2">
                     <ActionButton type="submit" disabled={busy}>{busy ? 'Saqlanmoqda…' : 'Vazifani yuborish'}</ActionButton>
                     <ActionButton className="mini-secondary" onClick={() => setSelectedId(null)}>Bekor</ActionButton>
@@ -904,10 +1360,66 @@ export default function MainApp() {
             {homeworks.length ? (
               <div className="grid gap-3">
                 {homeworks.map((task) => (
-                  <TaskCard key={task.id} task={task} teacher={teacher} onClick={() => { setSelectedId(task.id); setPage('detail') }} />
+                  <TaskCard key={task.id} task={task} teacher={teacher} now={now} onClick={() => { setSelectedId(task.id); setPage('detail') }} />
                 ))}
               </div>
             ) : !loading && <Panel>Hozircha uy vazifalari yo‘q.</Panel>}
+          </section>
+        )}
+
+        {page === 'questions' && (
+          <section className="mt-7 grid gap-4">
+            <div>
+              <h1 className="text-xl font-extrabold">{student ? 'Savollarim' : 'Savollar inboxi'}</h1>
+              <p className="mt-1 text-sm text-[var(--mini-muted)]">Yozishmalar tarixda saqlanadi.</p>
+            </div>
+            {student ? (
+              <Panel>
+                <h2 className="font-bold">Savol yuborish</h2>
+                <form className="mt-3 grid gap-3" onSubmit={sendQuestion}>
+                  <label className="mini-field"><span>Savolingiz</span><textarea rows="4" maxLength="10000" value={questionText} onChange={(event) => setQuestionText(event.target.value)} required /></label>
+                  <label className="mini-field"><span>Fayl yoki ovoz (ixtiyoriy, 20 MB gacha)</span><input type="file" onChange={(event) => setQuestionFile(event.target.files?.[0] || null)} /></label>
+                  <ActionButton type="submit" disabled={busy || !questionText.trim()}>{busy ? 'Yuborilmoqda…' : 'Savol yuborish'}</ActionButton>
+                </form>
+              </Panel>
+            ) : (
+              <div className="grid gap-2 sm:grid-cols-2">
+                <label className="mini-field"><span>Holati</span><select value={questionStatus} onChange={(event) => setQuestionStatus(event.target.value)}>
+                  <option value="">Barchasi</option><option value="open">Ochiq</option><option value="answered">Javob berilgan</option><option value="closed">Yopilgan</option>
+                </select></label>
+                <label className="mini-field"><span>Qidirish</span><input value={questionSearch} onChange={(event) => setQuestionSearch(event.target.value)} placeholder="O‘quvchi yoki matn" /></label>
+              </div>
+            )}
+            {questionTickets.map((ticket) => (
+              <Panel key={ticket.id}>
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="min-w-0">
+                    <h2 className="break-words font-bold">{student ? 'Sizning savolingiz' : ticket.student_name}</h2>
+                    <p className="text-xs text-[var(--mini-muted)]">{ticket.status === 'open' ? 'Ochiq' : ticket.status === 'answered' ? 'Javob berilgan' : 'Yopilgan'} · {formatDate(ticket.last_message_at)}</p>
+                  </div>
+                  {Number(ticket.unread_count) > 0 && <span className="rounded-full bg-[var(--mini-accent)] px-2 py-1 text-xs">{ticket.unread_count} yangi</span>}
+                </div>
+                <div className="mt-3 grid gap-3">
+                  {ticket.messages?.map((message) => (
+                    <div key={message.id} className="rounded-2xl bg-[var(--mini-bg)] p-3">
+                      <p className="text-xs font-semibold text-[var(--mini-muted)]">{message.actor_role === 'student' ? 'O‘quvchi' : message.actor_role === 'teacher' ? 'O‘qituvchi' : 'Qabulxona'} · {formatDate(message.created_at)}</p>
+                      {message.body && <p className="mt-1 whitespace-pre-wrap break-words text-sm">{message.body}</p>}
+                      {message.file_url && <SubmissionFile file={{ kind: 'attachment', original_name: 'Ilova', download_url: message.file_url }} />}
+                    </div>
+                  ))}
+                </div>
+                {!student && ticket.status !== 'closed' && (
+                  <div className="mt-3 grid gap-2">
+                    <label className="mini-field"><span>Javob</span><textarea rows="2" value={questionReply[ticket.id] || ''} onChange={(event) => setQuestionReply((current) => ({ ...current, [ticket.id]: event.target.value }))} /></label>
+                    <div className="flex flex-wrap gap-2">
+                      <ActionButton disabled={busy || !String(questionReply[ticket.id] || '').trim()} onClick={() => sendQuestionReply(ticket)}>Javob yuborish</ActionButton>
+                      {['owner', 'reception'].includes(role) && <ActionButton className="mini-secondary" disabled={busy} onClick={() => closeQuestion(ticket)}>Yopish</ActionButton>}
+                    </div>
+                  </div>
+                )}
+              </Panel>
+            ))}
+            {!questionTickets.length && <Panel>{loading ? 'Savollar yuklanmoqda…' : student ? 'Sizda savol yo‘q.' : 'Bu filtrda savol topilmadi.'}</Panel>}
           </section>
         )}
 
@@ -917,42 +1429,89 @@ export default function MainApp() {
               <p className="text-sm text-[var(--mini-muted)]">{selectedHomework.groups?.name || 'Uy vazifasi'}</p>
               <h1 className="mt-1 text-xl font-extrabold">{selectedHomework.title}</h1>
               <p className="mt-3 whitespace-pre-wrap text-sm leading-relaxed">{selectedHomework.description || 'Izoh berilmagan.'}</p>
-              <p className="mt-3 text-xs text-[var(--mini-muted)]">Muddat: {formatDeadline(selectedHomework.due_at)}</p>
+              <p className="mt-3 text-xs text-[var(--mini-muted)]">Muddat: {formatCountdown(selectedHomework.due_at, now)}</p>
               {selectedHomework.file_url && <a className="mini-link mt-3 inline-block" href={selectedHomework.file_url} target="_blank" rel="noreferrer">Vazifa faylini ochish</a>}
             </Panel>
             {student && (
               <Panel>
                 <h2 className="font-bold">Javobni topshirish</h2>
-                {selectedHomework.submission?.status && (
+                {selectedHomework.submission?.state && (
                   <p className="mt-2 text-sm text-[var(--mini-muted)]">
-                    Holati: {selectedHomework.submission.status === 'approved' ? 'Bajardi' : selectedHomework.submission.status === 'rejected' ? 'Bajarmadi' : 'Tekshirilmoqda'}
+                    Holati: {selectedHomework.submission.state === 'draft' ? 'Draft' : selectedHomework.submission.state === 'checked'
+                      ? selectedHomework.submission.teacher_result === 'done' ? 'Bajardi' : 'Bajarmadi'
+                      : selectedHomework.submission.state === 'expired' ? 'Draft muddati tugagan' : 'Topshirildi · tekshirilmoqda'}
                   </p>
                 )}
+                {selectedHomework.submission?.state === 'draft'
+                  && !selectedHomework.submission?.files?.some((file) => ['voice', 'video_note'].includes(file.kind))
+                  && <p className="mt-2 text-sm font-semibold text-amber-300">Dumaloq video yoki golos xabar yuborilmagan.</p>}
                 {selectedHomework.submission?.feedback && <p className="mt-2 text-sm">Izoh: {selectedHomework.submission.feedback}</p>}
-                <form id="mini-submission-form" className="mt-4 grid gap-3" onSubmit={saveSubmission}>
+                {selectedHomework.submission?.state === 'checked' && (
+                  <p className="mt-2 text-sm">O‘qituvchi bahosi: <strong>{selectedHomework.submission.teacher_result === 'done' ? 'Bajardi' : 'Bajarmadi'}</strong></p>
+                )}
+                {selectedHomework.submission?.files?.map((file) => <SubmissionFile key={file.id} file={file} />)}
+                {['submitted', 'checked'].includes(selectedHomework.submission?.state) && (
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    <ActionButton disabled={busy} onClick={() => markStudentResult(selectedHomework.submission.id, 'done')}>Bajardim</ActionButton>
+                    <ActionButton disabled={busy} className="mini-secondary" onClick={() => markStudentResult(selectedHomework.submission.id, 'not_done')}>Bajarolmadim</ActionButton>
+                  </div>
+                )}
+                {!selectedHomeworkSubmissionLocked && <form id="mini-submission-form" className="mt-4 grid gap-3" onSubmit={saveSubmission}>
                   <label className="mini-field"><span>Matnli javob</span><textarea rows="4" value={submissionForm.text} onChange={(event) => setSubmissionForm({ ...submissionForm, text: event.target.value })} /></label>
-                  <label className="mini-field"><span>Rasm yoki PDF (10 MB gacha)</span><input type="file" accept="application/pdf,image/jpeg,image/png,image/webp" onChange={(event) => chooseSubmissionFile(event.target.files?.[0] || null)} /></label>
-                  <label className="mini-field"><span>Video yoki ovozli xabar (majburiy)</span><input type="file" accept="video/*,audio/*" onChange={(event) => setSubmissionForm({ ...submissionForm, videoNote: event.target.files?.[0] || null })} /></label>
-                  <p className="text-xs text-[var(--mini-muted)]">Topshiriq to‘liq hisoblanishi uchun matn yoki fayl va bitta video yoki ovozli xabar kerak.</p>
-                  {submissionPreview && (
-                    submissionForm.file?.type.startsWith('image/')
-                      ? <img className="max-h-64 w-full rounded-2xl object-contain" src={submissionPreview} alt="Yuboriladigan rasm ko‘rinishi" />
-                      : <a className="mini-link break-all" href={submissionPreview} target="_blank" rel="noreferrer">PDF ko‘rinishini ochish · {submissionForm.file?.name}</a>
+                  <label className="mini-field"><span>Fayllar (istalgan tur, har biri 100 MB gacha)</span><input type="file" multiple onChange={(event) => chooseSubmissionFiles(event.target.files)} /></label>
+                  {!!submissionForm.files.length && <ul className="grid gap-1 text-xs text-[var(--mini-muted)]">{submissionForm.files.map((file) => <li key={`${file.name}:${file.size}`}>{file.name} · {(file.size / (1024 * 1024)).toFixed(1)} MB</li>)}</ul>}
+                  {!selectedHomeworkHasProof && typeof window.MediaRecorder === 'function' && navigator.mediaDevices?.getUserMedia && (
+                    <div className="grid gap-2">
+                      <ActionButton className={recording ? 'mini-danger' : 'mini-secondary'} disabled={busy} onClick={toggleVoiceRecording}>
+                        {recording ? <><Square size={15} /> Ovoz yozishni tugatish</> : <><Mic size={15} /> Ilovada ovoz yozish</>}
+                      </ActionButton>
+                      {recordedProof && <p className="text-xs text-[var(--mini-muted)]">Ovozli proof tayyor: {recordedProofDuration} soniya. Draft saqlang.</p>}
+                    </div>
                   )}
-                  <ActionButton type="submit" disabled={busy || (!submissionForm.text.trim() && !submissionForm.file) || (!submissionForm.videoNote && !selectedHomework.submission?.video_note_url && !selectedHomework.submission?.voice_url)}>{busy ? 'Yuborilmoqda…' : 'Topshirish'}</ActionButton>
-                </form>
+                  {selectedHomework.submission?.state === 'draft' && <p className="text-xs text-[var(--mini-muted)]">Draft o‘qituvchiga ko‘rinmaydi. Kamida bitta fayl yoki matn va aynan bitta 3 soniyalik ovozli xabar yoki dumaloq video kerak. Ovoz yozish ishlamasa, botdan proof yuboring.</p>}
+                  <ActionButton type="submit" disabled={busy || (!submissionForm.text.trim() && !submissionForm.files.length)}>{busy ? 'Saqlanmoqda…' : 'Draftni saqlash'}</ActionButton>
+                </form>}
+                <ActionButton className="mini-secondary mt-3 w-full" onClick={async () => {
+                  try {
+                    const link = submissionBotLink || await fetchHomeworkBotLink(selectedHomework.id)
+                    setSubmissionBotLink(link)
+                    window.Telegram?.WebApp?.openTelegramLink?.(link)
+                    if (!window.Telegram?.WebApp?.openTelegramLink) window.open(link, '_blank', 'noopener,noreferrer')
+                  } catch (linkError) {
+                    setError(linkError.message || 'Bot havolasini ochib bo‘lmadi.')
+                  }
+                }}>Botda proof yuborish</ActionButton>
               </Panel>
             )}
-            {teacher && selectedHomework.submissions?.map((submission) => (
+            {teacher && (
+              <Panel className="grid gap-3 sm:grid-cols-2">
+                <label className="mini-field"><span>Tekshiruv holati</span>
+                  <select value={reviewStatusFilter} onChange={(event) => setReviewStatusFilter(event.target.value)}>
+                    <option value="all">Barcha holatlar</option>
+                    <option value="pending">Tekshirilmagan</option>
+                    <option value="done">Bajardi</option>
+                    <option value="not_done">Bajarmadi</option>
+                  </select>
+                </label>
+                <label className="mini-field"><span>O‘quvchini qidirish</span>
+                  <input value={reviewStudentFilter} onChange={(event) => setReviewStudentFilter(event.target.value)} placeholder="Ism bo‘yicha" />
+                </label>
+              </Panel>
+            )}
+            {teacher && filteredReviewSubmissions.map((submission) => (
               <Panel key={submission.id}>
                 <div className="flex items-center justify-between gap-3">
-                  <h2 className="font-bold">{submission.students?.name || 'O‘quvchi'}</h2>
-                  <span className="text-xs text-[var(--mini-muted)]">{submission.status}</span>
+                  <h2 className="font-bold">{submission.student_name || submission.students?.name || 'O‘quvchi'}</h2>
+                  <span className="text-xs text-[var(--mini-muted)]">Urinish {submission.attempt_number || 1} · {formatDate(submission.submitted_at)}</span>
                 </div>
                 {submission.content_text && <p className="mt-3 whitespace-pre-wrap text-sm">{submission.content_text}</p>}
-                {submission.file_url && <a className="mini-link mt-3 inline-block" href={submission.file_url} target="_blank" rel="noreferrer">Yuborilgan faylni ochish</a>}
-                {submission.video_note_url && <a className="mini-link mt-3 inline-block" href={submission.video_note_url} target="_blank" rel="noreferrer">Video xabarni ochish</a>}
-                {submission.voice_url && <a className="mini-link mt-3 inline-block" href={submission.voice_url} target="_blank" rel="noreferrer">Ovozli xabarni ochish</a>}
+                {submission.files?.map((file) => (
+                  <div key={file.id} className="text-sm">
+                    <SubmissionFile file={file} />
+                    {isExecutableFile(file)
+                      && <span className="ml-2 text-amber-300">Diqqat: bajariladigan fayl, faqat yuklab oling.</span>}
+                  </div>
+                ))}
                 <label className="mini-field mt-3"><span>O‘qituvchi izohi</span>
                   <textarea rows="2" value={feedbacks[submission.id] ?? submission.feedback ?? ''} onChange={(event) => setFeedbacks({ ...feedbacks, [submission.id]: event.target.value })} />
                 </label>
@@ -962,6 +1521,44 @@ export default function MainApp() {
                 </div>
               </Panel>
             ))}
+            {teacher && selectedHomework.notSubmitted?.length > 0 && (
+              <Panel>
+                <h2 className="font-bold">Hali topshirmaganlar</h2>
+                {selectedHomework.notSubmitted.map((person) => <p key={person.id} className="mt-2 text-sm">{person.name}</p>)}
+              </Panel>
+            )}
+            <Panel>
+              <h2 className="font-bold">Topshiriq tarixi</h2>
+              <div className="mt-3 grid gap-3">
+                {homeworkHistory.submissions.map((attempt) => (
+                  <div key={attempt.id} className="rounded-2xl bg-[var(--mini-bg)] p-3">
+                    <p className="text-sm font-semibold">Urinish {attempt.attempt_number} · {attempt.state === 'draft' ? 'Draft' : attempt.state === 'expired' ? 'Muddati tugagan' : attempt.state === 'checked' ? attempt.teacher_result === 'done' ? 'Bajardi' : 'Bajarmadi' : 'Topshirildi'}</p>
+                    <p className="mt-1 text-xs text-[var(--mini-muted)]">{attempt.student_name || formatDate(attempt.submitted_at || attempt.created_at)}</p>
+                    {attempt.content_text && <p className="mt-2 whitespace-pre-wrap text-sm">{attempt.content_text}</p>}
+                    {attempt.files.map((file) => <SubmissionFile key={file.id} file={file} />)}
+                  </div>
+                ))}
+                {homeworkHistory.events.map((event) => {
+                  const detailText = (() => {
+                    try {
+                    const details = JSON.parse(event.details || '{}')
+                      return details.comment || details.reason || details.name || ''
+                    } catch {
+                      return ''
+                    }
+                  })()
+                  return (
+                    <div key={event.id} className="border-l-2 border-[var(--mini-accent)] pl-3">
+                      <p className="text-sm">{homeworkEventLabels[event.event_type] || event.event_type}</p>
+                      {detailText && <p className="mt-1 break-words text-xs text-[var(--mini-muted)]">{detailText}</p>}
+                      <p className="mt-1 text-[11px] text-[var(--mini-muted)]">{formatDate(event.created_at)}</p>
+                    </div>
+                  )
+                })}
+                {!homeworkHistory.events.length && !homeworkHistory.submissions.length
+                  && <p className="text-sm text-[var(--mini-muted)]">Tarix hali mavjud emas.</p>}
+              </div>
+            </Panel>
           </section>
         )}
 
@@ -1029,7 +1626,7 @@ export default function MainApp() {
           </section>
         )}
 
-        {page === 'finance' && role === 'owner' && (
+        {page === 'finance' && canAccessPage(role, 'finance') && (
           <section className="mt-7 grid gap-4">
             <h1 className="text-xl font-extrabold">Moliyaviy hisobot</h1>
             <Panel>
@@ -1079,10 +1676,12 @@ export default function MainApp() {
             <Panel>
               <h2 className="font-bold">{editingStudentId ? 'O‘quvchi ma’lumotlarini tahrirlash' : 'Yangi o‘quvchi qo‘shish'}</h2>
               <form id="mini-student-form" className="mt-4 grid gap-3" onSubmit={saveStudent}>
-                <label className="mini-field"><span>Ism va familiya</span><input value={studentForm.name} onChange={(event) => setStudentForm({ ...studentForm, name: event.target.value })} required /></label>
+                <label className="mini-field"><span>Ism va familiya</span><input value={studentForm.name} onChange={(event) => setStudentForm((current) => ({ ...current, name: event.target.value, username: current.autoUsername ? loginBaseFromName(event.target.value) : current.username }))} required /></label>
                 <label className="mini-field"><span>Telefon</span><input type="tel" value={studentForm.phone} onChange={(event) => setStudentForm({ ...studentForm, phone: event.target.value })} required /></label>
                 <label className="mini-field"><span>Ota telefoni</span><input type="tel" value={studentForm.fatherPhone} onChange={(event) => setStudentForm({ ...studentForm, fatherPhone: event.target.value })} /></label>
                 <label className="mini-field"><span>Ona telefoni</span><input type="tel" value={studentForm.motherPhone} onChange={(event) => setStudentForm({ ...studentForm, motherPhone: event.target.value })} /></label>
+                <label className="mini-field"><span>Mini App login</span><input value={studentForm.username} onChange={(event) => setStudentForm({ ...studentForm, username: event.target.value, autoUsername: false })} required /><small>Ism.familiya; band bo‘lsa avtomatik raqam qo‘shiladi.</small></label>
+                {!editingStudentId && <label className="mini-field"><span>O‘quvchi paroli (kamida 6 belgi)</span><input type="password" autoComplete="new-password" value={studentForm.password} onChange={(event) => setStudentForm({ ...studentForm, password: event.target.value })} minLength={6} required /><small>{studentForm.password.length < 6 ? 'Kuchsiz — kamida 6 belgi kiriting.' : studentForm.password.length < 10 ? 'O‘rtacha parol.' : 'Kuchli parol.'}</small><small>Parolni boshqa joylarda ishlatmang.</small></label>}
                 {!editingStudentId && <label className="mini-field"><span>Guruh</span>
                   <select value={studentForm.groupId} onChange={(event) => setStudentForm({ ...studentForm, groupId: event.target.value })}>
                     <option value="">Keyinroq biriktiraman</option>
@@ -1091,29 +1690,10 @@ export default function MainApp() {
                 </label>}
                 <div className="flex flex-wrap gap-2">
                   <ActionButton type="submit" disabled={busy}><Plus size={16} /> {busy ? 'Saqlanmoqda…' : editingStudentId ? 'Saqlash' : 'O‘quvchini yaratish'}</ActionButton>
-                  {editingStudentId && <ActionButton className="mini-secondary" disabled={busy} onClick={() => { setEditingStudentId(null); setStudentForm({ name: '', phone: '', fatherPhone: '', motherPhone: '', groupId: '' }) }}>Bekor qilish</ActionButton>}
+                  {editingStudentId && <ActionButton className="mini-secondary" disabled={busy} onClick={() => { setEditingStudentId(null); setStudentForm({ name: '', phone: '', fatherPhone: '', motherPhone: '', groupId: '', username: '', password: '', autoUsername: true }) }}>Bekor qilish</ActionButton>}
                 </div>
               </form>
             </Panel>
-            {credentials && (
-              <Panel>
-                <h2 className="font-bold">Yangi login va parol</h2>
-                <p className="mt-1 text-xs text-[var(--mini-muted)]">Parol xavfsizlik uchun qayta ko‘rsatilmaydi. Hozir nusxalab o‘quvchiga yetkazing.</p>
-                <p className="mt-3 text-sm">Login: <strong>{credentials.username}</strong></p>
-                <p className="mt-1 text-sm">Parol: <strong>{credentials.password}</strong></p>
-                <ActionButton className="mt-3" onClick={() => copyText(`${credentials.username}\n${credentials.password}`)}>
-                  <Copy size={15} /> {copied ? 'Nusxalandi' : 'Nusxalash'}
-                </ActionButton>
-                <ActionButton className="mini-secondary mt-3 w-full" disabled={busy} onClick={() => createInvite(credentials.profileId)}>
-                  Telegram akkauntni ulash
-                </ActionButton>
-                {inviteLinks[credentials.profileId] && (
-                  <a className="mini-link mt-3 block break-all" href={inviteLinks[credentials.profileId]} target="_blank" rel="noreferrer">
-                    Ulash havolasini ochish
-                  </a>
-                )}
-              </Panel>
-            )}
             <Panel>
               <h2 className="font-bold">O‘quvchilar ro‘yxati</h2>
               <label className="mini-field mt-3">
@@ -1122,47 +1702,88 @@ export default function MainApp() {
               </label>
               <div className="mt-3 divide-y divide-[var(--mini-border)]">
                 {students.filter((item) => `${item.name} ${item.phone}`.toLowerCase().includes(studentSearch.toLowerCase())).map((item) => (
-                  <div key={item.id} className="flex items-center justify-between gap-3 py-3">
-                    <div className="min-w-0"><p className="truncate text-sm font-semibold">{item.name}</p><p className="text-xs text-[var(--mini-muted)]">{item.phone || 'Telefon yo‘q'}</p></div>
-                    <div className="flex shrink-0 flex-col items-end gap-1">
-                      <span className="rounded-full bg-[var(--mini-bg)] px-3 py-1 text-xs">{item.login || 'Login yo‘q'}</span>
-                      <ActionButton className="mini-secondary min-h-9 px-3 text-xs" disabled={busy} onClick={() => editStudent(item)}>Tahrirlash</ActionButton>
-                      {item.telegram_id
-                        ? <span className="text-[11px] text-[var(--mini-muted)]">Telegram ulangan</span>
-                        : <ActionButton className="mini-secondary min-h-9 px-3 text-xs" disabled={busy} onClick={() => createInvite(item.profile_id)}>Ulash</ActionButton>}
-                      {inviteLinks[item.profile_id] && (
-                        <button className="mini-link max-w-36 truncate text-xs" type="button" onClick={() => copyText(inviteLinks[item.profile_id])}>
-                          Havolani nusxalash
-                        </button>
-                      )}
+                  <Panel key={item.id} className="my-3">
+                    <p className="truncate text-sm font-semibold">{item.name}</p>
+                    <p className="text-xs text-[var(--mini-muted)]">{item.phone || 'Telefon yo‘q'}</p>
+                    <div className="mt-3 flex flex-wrap items-center gap-2 text-sm">
+                      <strong>Login: {item.login || '—'}</strong>
+                      {item.login && <ActionButton className="mini-secondary min-h-9 px-3 text-xs" onClick={() => copyText(item.login)}>Loginni nusxalash</ActionButton>}
                     </div>
-                  </div>
+                    <p className="mt-2 text-xs text-[var(--mini-muted)]">{revealedStudentPasswords[item.id] ? `Parol: ${revealedStudentPasswords[item.id]}` : 'Parol yashirilgan'}</p>
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      <ActionButton className="mini-secondary min-h-9 px-3 text-xs" disabled={busy} onClick={() => revealStudentPassword(item)}>Parolni ko‘rsatish</ActionButton>
+                      <ActionButton className="mini-secondary min-h-9 px-3 text-xs" disabled={busy} onClick={() => setStudentPasswordForm({ studentId: item.id, username: item.login || '', password: '' })}>Parolni o‘zgartirish</ActionButton>
+                      {item.telegram_id
+                        ? <><span className="self-center text-xs text-[var(--mini-muted)]">Telegram ulangan</span><ActionButton className="mini-secondary min-h-9 px-3 text-xs" disabled={busy} onClick={() => unlinkStudent(item)}>Telegramdan uzish</ActionButton></>
+                        : <><span className="self-center text-xs text-[var(--mini-muted)]">Telegram ulanmagan</span><ActionButton className="mini-secondary min-h-9 px-3 text-xs" disabled={busy} onClick={() => createInvite({ studentId: item.id })}>Ulash</ActionButton></>}
+                      <ActionButton className="mini-secondary min-h-9 px-3 text-xs" disabled={busy} onClick={() => editStudent(item)}>Tahrirlash</ActionButton>
+                      {inviteLinks[item.id] && <button className="mini-link max-w-36 truncate text-xs" type="button" onClick={() => copyText(inviteLinks[item.id])}>{copied ? 'Nusxalandi' : 'Havolani nusxalash'}</button>}
+                    </div>
+                    {studentPasswordForm.studentId === item.id && (
+                      <form className="mt-3 grid gap-2" onSubmit={changeStudentCredentials}>
+                        <label className="mini-field"><span>Login</span><input value={studentPasswordForm.username} onChange={(event) => setStudentPasswordForm({ ...studentPasswordForm, username: event.target.value })} required /></label>
+                        <label className="mini-field"><span>Yangi parol (kamida 6 belgi)</span><input type="password" value={studentPasswordForm.password} onChange={(event) => setStudentPasswordForm({ ...studentPasswordForm, password: event.target.value })} minLength={6} autoComplete="new-password" required /></label>
+                        <small>Parolni boshqa joylarda ishlatmang.</small>
+                        <div className="flex gap-2"><ActionButton type="submit" disabled={busy}>Saqlash</ActionButton><ActionButton className="mini-secondary" disabled={busy} onClick={() => setStudentPasswordForm({ studentId: '', username: '', password: '' })}>Bekor qilish</ActionButton></div>
+                      </form>
+                    )}
+                  </Panel>
                 ))}
                 {!students.length && <p className="py-4 text-sm text-[var(--mini-muted)]">O‘quvchilar topilmadi.</p>}
               </div>
             </Panel>
-            <Panel>
-              <h2 className="font-bold">{editingTeacherId ? 'O‘qituvchi ma’lumotlarini tahrirlash' : 'O‘qituvchi qo‘shish'}</h2>
-              {!editingTeacherId && <p className="mt-1 text-xs text-[var(--mini-muted)]">Akkaunt yaratiladi va Telegram ulash havolasi tayyorlanadi.</p>}
-              <form id="mini-teacher-form" className="mt-4 grid gap-3" onSubmit={saveTeacher}>
-                <label className="mini-field"><span>Ism va familiya</span><input value={teacherForm.name} onChange={(event) => setTeacherForm({ ...teacherForm, name: event.target.value })} required /></label>
-                <label className="mini-field"><span>Telefon</span><input type="tel" value={teacherForm.phone} onChange={(event) => setTeacherForm({ ...teacherForm, phone: event.target.value })} /></label>
-                <label className="mini-field"><span>Oylik maosh (so‘m)</span><input type="number" min="0" value={teacherForm.monthlySalary} onChange={(event) => setTeacherForm({ ...teacherForm, monthlySalary: event.target.value })} /></label>
-                <div className="flex flex-wrap gap-2">
-                  <ActionButton type="submit" disabled={busy}>{busy ? 'Saqlanmoqda…' : editingTeacherId ? 'Saqlash' : 'O‘qituvchini qo‘shish'}</ActionButton>
-                  {editingTeacherId && <ActionButton className="mini-secondary" disabled={busy} onClick={() => { setEditingTeacherId(null); setTeacherForm({ name: '', phone: '', monthlySalary: '' }) }}>Bekor qilish</ActionButton>}
+            {canAccessEndpoint(role, 'staff:manage') && (
+              <Panel>
+                <h2 className="font-bold">Xodim akkauntlari</h2>
+                <form className="mt-4 grid gap-3" onSubmit={saveStaff}>
+                  <label className="mini-field"><span>Ism va familiya</span><input value={staffForm.name} onChange={(event) => setStaffForm((current) => ({ ...current, name: event.target.value, username: staffUsernameAuto ? loginBaseFromName(event.target.value) : current.username }))} required /></label>
+                  <label className="mini-field"><span>Telefon</span><input type="tel" value={staffForm.phone} onChange={(event) => setStaffForm({ ...staffForm, phone: event.target.value })} /></label>
+                  <label className="mini-field"><span>Rol</span><select value={staffForm.role} onChange={(event) => setStaffForm({ ...staffForm, role: event.target.value })}><option value="reception">Qabulxona</option><option value="teacher">O‘qituvchi</option></select></label>
+                  <label className="mini-field"><span>Login</span><input value={staffForm.username} onChange={(event) => { setStaffUsernameAuto(false); setStaffForm({ ...staffForm, username: event.target.value }) }} required /><small>Ism.familiya; band bo‘lsa avtomatik raqam qo‘shiladi.</small></label>
+                  <label className="mini-field"><span>{editingStaffId ? 'Yangi parol (ixtiyoriy)' : 'Parol (kamida 12 belgi)'}</span><input type="password" autoComplete="new-password" value={staffForm.password} onChange={(event) => setStaffForm({ ...staffForm, password: event.target.value })} minLength={staffForm.password ? 12 : undefined} required={!editingStaffId} /></label>
+                  <div className="flex flex-wrap gap-2"><ActionButton type="submit" disabled={busy}>{busy ? 'Saqlanmoqda…' : editingStaffId ? 'Xodimni saqlash' : 'Xodim qo‘shish'}</ActionButton>{editingStaffId && <ActionButton className="mini-secondary" disabled={busy} onClick={() => { setEditingStaffId(null); setStaffUsernameAuto(true); setStaffForm({ name: '', phone: '', role: 'reception', username: '', password: '' }) }}>Bekor qilish</ActionButton>}</div>
+                </form>
+                <div className="mt-3 divide-y divide-[var(--mini-border)]">
+                  {staffRows.map((item) => (
+                    <div key={item.id} className="flex flex-wrap items-center justify-between gap-2 py-3">
+                      <div><p className="text-sm font-semibold">{item.name}</p><p className="text-xs text-[var(--mini-muted)]">@{item.username} · {item.role === 'teacher' ? 'O‘qituvchi' : 'Qabulxona'} · {item.phone || 'Telefon yo‘q'}</p></div>
+                      <div className="flex flex-wrap gap-1">
+                        <ActionButton className="mini-secondary min-h-9 px-3 text-xs" disabled={busy} onClick={() => { setEditingStaffId(item.id); setStaffUsernameAuto(false); setStaffForm({ name: item.name, phone: item.phone || '', role: item.role, username: item.username, password: '' }) }}>Tahrirlash / parolni tiklash</ActionButton>
+                        <ActionButton className="mini-secondary min-h-9 px-3 text-xs" disabled={busy} onClick={() => toggleStaffActive(item)}>{item.is_active ? 'Faolsizlantirish' : 'Faollashtirish'}</ActionButton>
+                      </div>
+                    </div>
+                  ))}
                 </div>
-              </form>
+              </Panel>
+            )}
+            <Panel>
+              <h2 className="font-bold">O‘qituvchilar</h2>
+              {canAccessEndpoint(role, 'staff:manage') && (
+                <>
+                  <h3 className="mt-4 font-semibold">{editingTeacherId ? 'O‘qituvchi ma’lumotlarini tahrirlash' : 'O‘qituvchi qo‘shish'}</h3>
+                  <form id="mini-teacher-form" className="mt-4 grid gap-3" onSubmit={saveTeacher}>
+                    <label className="mini-field"><span>Ism va familiya</span><input value={teacherForm.name} onChange={(event) => setTeacherForm((current) => ({ ...current, name: event.target.value, username: current.autoUsername ? loginBaseFromName(event.target.value) : current.username }))} required /></label>
+                    <label className="mini-field"><span>Telefon</span><input type="tel" value={teacherForm.phone} onChange={(event) => setTeacherForm({ ...teacherForm, phone: event.target.value })} /></label>
+                    <label className="mini-field"><span>Oylik maosh (so‘m)</span><input type="number" min="0" value={teacherForm.monthlySalary} onChange={(event) => setTeacherForm({ ...teacherForm, monthlySalary: event.target.value })} /></label>
+                    <label className="mini-field"><span>Login</span><input value={teacherForm.username} onChange={(event) => setTeacherForm({ ...teacherForm, username: event.target.value, autoUsername: false })} required /><small>Ism.familiya; band bo‘lsa avtomatik raqam qo‘shiladi.</small></label>
+                    <label className="mini-field"><span>{editingTeacherId ? 'Yangi parol (ixtiyoriy)' : 'Parol (kamida 12 belgi)'}</span><input type="password" autoComplete="new-password" value={teacherForm.password} onChange={(event) => setTeacherForm({ ...teacherForm, password: event.target.value })} minLength={teacherForm.password ? 12 : undefined} required={!editingTeacherId || !staffRows.some((row) => row.teacher_id === editingTeacherId)} /></label>
+                    <div className="flex flex-wrap gap-2">
+                      <ActionButton type="submit" disabled={busy}>{busy ? 'Saqlanmoqda…' : editingTeacherId ? 'Saqlash' : 'O‘qituvchini qo‘shish'}</ActionButton>
+                      {editingTeacherId && <ActionButton className="mini-secondary" disabled={busy} onClick={() => { setEditingTeacherId(null); setTeacherForm({ name: '', phone: '', monthlySalary: '', username: '', password: '', autoUsername: true }) }}>Bekor qilish</ActionButton>}
+                    </div>
+                  </form>
+                </>
+              )}
               <div className="mt-3 divide-y divide-[var(--mini-border)]">
                 {teachers.map((item) => (
                   <div key={item.id} className="flex flex-wrap items-center justify-between gap-2 py-3">
                     <div className="min-w-0"><p className="truncate text-sm font-semibold">{item.name}</p><p className="text-xs text-[var(--mini-muted)]">{item.phone || 'Telefon yo‘q'}</p></div>
                     <div className="flex flex-wrap items-center gap-1">
-                      {item.telegram_id
+                      {canAccessEndpoint(role, 'staff:manage') && (item.telegram_id
                         ? <span className="text-xs text-[var(--mini-muted)]">Telegram ulangan</span>
-                        : item.profile_id && <ActionButton className="mini-secondary min-h-9 px-3 text-xs" disabled={busy} onClick={() => createInvite(item.profile_id)}>Ulash</ActionButton>}
-                      <ActionButton className="mini-secondary min-h-9 px-3 text-xs" disabled={busy} onClick={() => editTeacher(item)}>Tahrirlash</ActionButton>
-                      <ActionButton className="mini-secondary min-h-9 px-3 text-xs" disabled={busy} onClick={() => removeTeacher(item)}>O‘chirish</ActionButton>
+                        : item.profile_id && <ActionButton className="mini-secondary min-h-9 px-3 text-xs" disabled={busy} onClick={() => createInvite({ profileId: item.profile_id })}>Ulash</ActionButton>)}
+                      {canAccessEndpoint(role, 'staff:manage') && <ActionButton className="mini-secondary min-h-9 px-3 text-xs" disabled={busy} onClick={() => editTeacher(item)}>Tahrirlash</ActionButton>}
+                      {canAccessEndpoint(role, 'staff:manage') && <ActionButton className="mini-secondary min-h-9 px-3 text-xs" disabled={busy} onClick={() => removeTeacher(item)}>O‘chirish</ActionButton>}
                     </div>
                   </div>
                 ))}
@@ -1231,18 +1852,20 @@ export default function MainApp() {
         {page === 'reports' && privileged && (
           <section className="mt-7">
             <h1 className="text-xl font-extrabold">Oylik hisobotlar</h1>
-            <p className="mt-1 text-sm text-[var(--mini-muted)]">Topshirilgan va baholangan vazifalar</p>
+            <p className="mt-1 text-sm text-[var(--mini-muted)]">Oy bo‘yicha berilgan va bajarilgan vazifalar</p>
             <div className="mt-4 grid gap-3">
               {reports.map((report) => (
                 <Panel key={`${report.student_id}-${report.month_start}`}>
                   <div className="flex items-start justify-between gap-3">
                     <div><h2 className="font-bold">{report.student_name}</h2><p className="mt-1 text-xs text-[var(--mini-muted)]">{report.month_start || 'Hali topshiriq yo‘q'}</p></div>
-                    <span className="rounded-full bg-[var(--mini-bg)] px-3 py-1 text-xs">{report.total_submissions} ta</span>
+                    <span className="rounded-full bg-[var(--mini-bg)] px-3 py-1 text-xs">{report.assigned_count} ta berilgan</span>
                   </div>
-                  <div className="mt-3 grid grid-cols-3 gap-2 text-center text-xs">
-                    <div><strong className="block text-base">{report.approved_count}</strong>To‘g‘ri</div>
-                    <div><strong className="block text-base">{report.rejected_count}</strong>Qaytarilgan</div>
-                    <div><strong className="block text-base">{report.pending_count}</strong>Kutilmoqda</div>
+                  <div className="mt-3 grid grid-cols-2 gap-2 text-center text-xs sm:grid-cols-3">
+                    <div><strong className="block text-base">{report.submitted_on_time_count}</strong>O‘z vaqtida</div>
+                    <div><strong className="block text-base">{report.late_count}</strong>Kechikkan</div>
+                    <div><strong className="block text-base">{report.not_done_count}</strong>Bajarolmagan</div>
+                    <div><strong className="block text-base">{report.bajardi_count}</strong>Bajardi</div>
+                    <div><strong className="block text-base">{report.bajarmadi_count}</strong>Bajarmadi</div>
                   </div>
                 </Panel>
               ))}

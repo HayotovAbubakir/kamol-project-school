@@ -79,11 +79,12 @@ jobs:
           CLOUDFLARE_API_URL: ${{ secrets.CLOUDFLARE_API_URL }}
           AUTH_SECRET: ${{ secrets.AUTH_SECRET }}
           BOT_API_SECRET: ${{ secrets.BOT_API_SECRET }}
+          STUDENT_PASSWORD_KEY: ${{ secrets.STUDENT_PASSWORD_KEY }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_WEBHOOK_SECRET: ${{ secrets.TELEGRAM_WEBHOOK_SECRET }}
         run: |
           missing=()
-          for name in CLOUDFLARE_ACCOUNT_ID CLOUDFLARE_API_URL AUTH_SECRET BOT_API_SECRET TELEGRAM_BOT_TOKEN TELEGRAM_WEBHOOK_SECRET; do
+          for name in CLOUDFLARE_ACCOUNT_ID CLOUDFLARE_API_URL AUTH_SECRET BOT_API_SECRET STUDENT_PASSWORD_KEY TELEGRAM_BOT_TOKEN TELEGRAM_WEBHOOK_SECRET; do
             if [[ -z "${!name}" ]]; then missing+=("$name"); fi
           done
           if (( ${#missing[@]} )); then
@@ -115,6 +116,7 @@ jobs:
         env:
           AUTH_SECRET: ${{ secrets.AUTH_SECRET }}
           BOT_API_SECRET: ${{ secrets.BOT_API_SECRET }}
+          STUDENT_PASSWORD_KEY: ${{ secrets.STUDENT_PASSWORD_KEY }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_WEBHOOK_SECRET: ${{ secrets.TELEGRAM_WEBHOOK_SECRET }}
           CLOUDFLARE_API_URL: ${{ secrets.CLOUDFLARE_API_URL }}
@@ -124,6 +126,7 @@ jobs:
           put_secret() { printf '%s' "$2" | npx wrangler secret put "$1"; }
           put_secret AUTH_SECRET "$AUTH_SECRET"
           put_secret BOT_API_SECRET "$BOT_API_SECRET"
+          put_secret STUDENT_PASSWORD_KEY "$STUDENT_PASSWORD_KEY"
           put_secret TELEGRAM_BOT_TOKEN "$TELEGRAM_BOT_TOKEN"
           put_secret TELEGRAM_WEBHOOK_SECRET "$TELEGRAM_WEBHOOK_SECRET"
           put_secret TELEGRAM_WEBAPP_URL "${CLOUDFLARE_API_URL%/}/miniapp.html"

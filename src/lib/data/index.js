@@ -26,11 +26,35 @@ import {
   submitHomework,
 } from '../../miniapp/api.js'
 
+async function workerRequest(path, { method = 'POST', body } = {}) {
+  const { data } = await cloudflare.auth.getSession()
+  const token = data.session?.access_token
+  if (!token) throw new Error('Sessiya tugagan. Ilovani Telegram ichidan qayta oching.')
+  const response = await fetch(path, {
+    method,
+    headers: {
+      Authorization: `Bearer ${token}`,
+      ...(body === undefined ? {} : { 'Content-Type': 'application/json' }),
+    },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  })
+  const result = await response.json()
+  if (!response.ok) throw new Error(result.error || 'So‘rovni bajarib bo‘lmadi.')
+  return result.data ?? result
+}
+
+async function workerFunction(name, body) {
+  const { data, error } = await cloudflare.functions.invoke(name, { body })
+  if (error) throw error
+  return data?.data ?? data
+}
+
 export const auth = {
   isConfigured: isBackendConfigured,
   getSession: () => cloudflare.auth.getSession(),
   getProfile: (id) => fetchProfile(id),
   signInWithTelegram: () => cloudflare.auth.signInWithTelegram(),
+  signInWithTelegramCredentials: (credentials) => cloudflare.auth.signInWithTelegramCredentials(credentials),
   signOut: () => cloudflare.auth.signOut(),
   updatePassword: (password) => cloudflare.auth.updateUser({ password }),
   onAuthStateChange: (callback) => cloudflare.auth.onAuthStateChange(callback),
@@ -49,6 +73,17 @@ export const students = {
   create: addStudent,
   update: updateStudent,
   remove: deleteStudent,
+  revealPassword: (id) => workerFunction(`students/${encodeURIComponent(id)}/password/reveal`, {}),
+  changePassword: (id, password, username) => workerFunction(`students/${encodeURIComponent(id)}/password`, { password, username }),
+  unlinkTelegram: (id) => workerFunction(`students/${encodeURIComponent(id)}/telegram/unlink`, {}),
+}
+
+export const staff = {
+  async list() {
+    return workerRequest('/api/staff', { method: 'GET' })
+  },
+  create: (record) => workerFunction('staff', record),
+  update: (id, updates) => workerFunction(`staff/${encodeURIComponent(id)}`, updates),
 }
 export const teachers = {
   async list() {
@@ -135,14 +170,14 @@ export const reports = { monthlyHomework: loadMonthlyReport }
 export const groupManagement = { create: addGroup, update: updateGroup, remove: deleteGroup }
 
 export const telegram = {
-  async createInvite(profileId) {
+  async createInvite(target) {
     const { data } = await cloudflare.auth.getSession()
     const token = data.session?.access_token
     if (!token) throw new Error('Sessiya tugagan. Ilovani Telegram ichidan qayta oching.')
     const response = await fetch('/api/telegram/invites', {
       method: 'POST',
       headers: { Authorization: `******`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ profileId }),
+      body: JSON.stringify(typeof target === 'string' ? { profileId: target } : target),
     })
     const result = await response.json()
     if (!response.ok) throw new Error(result.error || 'Telegram ulash havolasini yaratib bo‘lmadi.')
