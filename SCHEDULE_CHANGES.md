@@ -22,7 +22,7 @@ Shu funksiya Worker’ning bot uchun `/jadval` ma’lumotida, Website’dagi kun
 - `GET /api/schedule/state` foydalanuvchi ko‘rishi mumkin bo‘lgan guruhlar jadvalini beradi. `GET /api/schedule/history?group_id=...` o‘zgarishlar tarixi va xabarnomalar yetkazilish holatini qaytaradi.
 - Egasi va qabulxona istalgan guruh jadvalini o‘zgartiradi. O‘qituvchi faqat o‘zi dars beradigan guruhni o‘zgartirishi mumkin; o‘qituvchi boshlagan o‘zgarish haqida qabulxonaga ham xabar beriladi. O‘quvchi va tizimga kirmagan foydalanuvchi o‘zgartirish qila olmaydi.
 - Umumiy `/api/db` orqali `groups.schedule` yoki `groups.teacher_id` yangilash taqiqlangan. D1 triggeri `groups.schedule`ni bevosita yangilashni ham to‘sadi.
-- Vaqt formati, tugash vaqtining boshlanishdan keyin bo‘lishi, guruh ichidagi ustma-ust darslar va o‘qituvchining boshqa guruhlardagi darslari tekshiriladi. Doimiy jadval ziddiyatlari tanlangan sanadan boshlab 370 kun uchun tekshiriladi.
+- Vaqt formati, tugash vaqtining boshlanishdan keyin bo‘lishi, guruh ichidagi ustma-ust darslar va o‘qituvchining boshqa guruhlardagi darslari tekshiriladi. Doimiy jadval ziddiyatlari haftaning har bir tegishli kunida, jadval versiyasi yoki sana bo‘yicha override boshlanadigan/tugaydigan chegaralar atrofida tekshiriladi.
 
 ## Xabarnomalar
 
@@ -34,4 +34,4 @@ Server o‘zgarish yaratilayotgan paytda guruhdagi faol o‘quvchilar, eski va y
 
 Unit/Worker testlari boshlang‘ich jadval, override, bekor qilish, yangi versiya, qaytarish, sana bo‘yicha ziddiyat, ruxsatlar, so‘rov takrorlanishi, xabarnoma tarqatilishi va jadvalni bevosita yangilash taqiqini tekshiradi. `tests/miniapp.e2e.js` faylida qabulxona ertangi darsni ko‘chirishi, o‘qituvchi va o‘quvchi o‘zgarish hamda xabarnomani ko‘rishi uchun Playwright oqimi bor.
 
-Playwright oqimi API javoblarini mock qiladi; Worker/API va D1 xatti-harakatlarini Miniflare testlari tekshiradi. Haqiqiy Telegram xabari telefonda tekshirilgani tasdiqlanmagan. Doimiy jadval ziddiyatlari cheksiz muddatga emas, 370 kunlik oraliqda tekshiriladi.
+Playwright oqimi API javoblarini mock qiladi; Worker/API va D1 xatti-harakatlarini Miniflare testlari tekshiradi. Haqiqiy Telegram xabari telefonda tekshirilgani tasdiqlanmagan.

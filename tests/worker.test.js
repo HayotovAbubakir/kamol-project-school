@@ -491,6 +491,33 @@ describe('schedule change API', () => {
         ],
       },
     })).status).toBe(409)
+    const distantConflictDate = new Date(`${lessonDate}T12:00:00Z`)
+    distantConflictDate.setUTCDate(distantConflictDate.getUTCDate() + 400)
+    const distantConflictDateValue = distantConflictDate.toISOString().slice(0, 10)
+    await env.DB.prepare(`UPDATE schedule_versions SET valid_to = ?
+      WHERE group_id = 'schedule-busy-group' AND valid_to IS NULL`)
+      .bind(distantConflictDateValue).run()
+    await env.DB.prepare(`INSERT INTO schedule_versions
+      (id, group_id, valid_from, schedule, change_id, created_by)
+      VALUES ('distant-busy-version', 'schedule-busy-group', ?, ?, NULL, NULL)`)
+      .bind(distantConflictDateValue, JSON.stringify([{
+        slotId: 'busy-slot', day: weekday, startTime: '15:30', endTime: '16:30', teacherId: teacher.teacher_id,
+      }])).run()
+    expect((await request('/api/schedule/preview', {
+      method: 'POST',
+      token: owner.access_token,
+      body: {
+        requestId: 'schedule-distant-conflict-test-001',
+        groupId: 'schedule-group',
+        type: 'permanent',
+        validFrom: lessonDate,
+        slotId: 'schedule-slot',
+        day: weekday,
+        startTime: '15:00',
+        endTime: '16:00',
+        reason: 'Kelajakdagi ziddiyatni tekshirish',
+      },
+    })).status).toBe(409)
     const foreign = {
       ...payload,
       groupId: 'foreign-schedule-group',

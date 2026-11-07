@@ -3400,11 +3400,26 @@ async function validateScheduleChange(env, payload, profile) {
         }
       }
     }
-    const horizon = 370
-    for (let offset = 0; offset < horizon; offset += 1) {
-      const date = shiftScheduleDate(startDate, offset)
-      const dayLessons = nextSchedule.filter((slot) => slot.day === scheduleWeekday(date))
-      for (const slot of dayLessons) {
+    const candidateDays = new Set(nextSchedule.map((slot) => slot.day))
+    const conflictDates = new Set()
+    const addConflictDatesAround = (anchor) => {
+      if (!scheduleDate(anchor)) return
+      for (let offset = -7; offset <= 7; offset += 1) {
+        const date = shiftScheduleDate(anchor, offset)
+        if (date >= startDate && candidateDays.has(scheduleWeekday(date))) conflictDates.add(date)
+      }
+    }
+    addConflictDatesAround(startDate)
+    for (const version of state.versions) {
+      addConflictDatesAround(version.valid_from)
+      addConflictDatesAround(version.valid_to)
+    }
+    for (const override of state.overrides) {
+      addConflictDatesAround(override.original_date)
+      addConflictDatesAround(override.new_date)
+    }
+    for (const date of conflictDates) {
+      for (const slot of nextSchedule.filter((item) => item.day === scheduleWeekday(date))) {
         const conflict = findDateScheduleConflict({
           date, lesson: { ...slot, groupId: group.id, teacherId: slot.teacherId || group.teacher_id },
           groups: state.groups, versions: state.versions, overrides: state.overrides,
