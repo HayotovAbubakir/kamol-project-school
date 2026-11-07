@@ -59,7 +59,11 @@ async function safeReply(ctx, fn) {
   try {
     await fn()
   } catch (err) {
-    console.error('Telegram handler failed', err instanceof Error ? err.name : 'UnknownError')
+    console.error('Telegram handler failed', {
+      name: err instanceof Error ? err.name : 'UnknownError',
+      message: err instanceof Error ? err.message : String(err),
+      stack: err instanceof Error ? String(err.stack || '').split('\n').slice(0, 5).join(' | ') : '',
+    })
     try {
       await ctx.reply(dbHint(err))
     } catch {

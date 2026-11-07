@@ -580,6 +580,39 @@ describe('telegram webhook endpoint', () => {
     }
   })
 
+  it('answers /start without fetching the Worker\'s own API (Cloudflare 1042 loop)', async () => {
+    const calls = []
+    const sent = []
+    vi.stubGlobal('fetch', vi.fn(async (input, init) => {
+      const url = String(input instanceof Request ? input.url : input)
+      calls.push(url)
+      // Production behaviour: a Worker fetching its own workers.dev host fails with 1042 text.
+      if (url.startsWith('https://school.test/api/bot/')) return new Response('error code: 1042', { status: 200 })
+      if (url.endsWith('/getMe')) {
+        return Response.json({ ok: true, result: { id: 99, is_bot: true, first_name: 'Test Bot', username: 'KamolTestBot' } })
+      }
+      if (url.endsWith('/sendMessage')) {
+        sent.push(JSON.parse(init.body).text)
+        return Response.json({ ok: true, result: { message_id: 1, date: 0, chat: { id: 424242, type: 'private' } } })
+      }
+      if (url.endsWith('/setChatMenuButton')) return Response.json({ ok: true, result: true })
+      throw new Error(`Unexpected Telegram API call: ${url.replace(/bot[^/]+/, 'bot<redacted>')}`)
+    }))
+    try {
+      const response = await request('/api/telegram/webhook', {
+        method: 'POST',
+        headers: { 'X-Telegram-Bot-Api-Secret-Token': env.TELEGRAM_WEBHOOK_SECRET },
+        body: startUpdate(3),
+      })
+      expect(response.status).toBe(200)
+      expect(calls.some((url) => url.startsWith('https://school.test/api/bot/'))).toBe(false)
+      expect(sent.some((text) => text.includes('Kamol School ota-ona boti'))).toBe(true)
+      expect(sent.some((text) => text.includes('So‘rovni bajarishda xatolik'))).toBe(false)
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
   it('rejects updates with an invalid secret token without calling the bot API', async () => {
     const calls = []
     vi.stubGlobal('fetch', telegramFetchMock(calls))

@@ -371,6 +371,23 @@ async function validateGroupScheduleWrite(env, candidate) {
   if (error) throw new Error(error)
 }
 
+// A Worker cannot fetch its own workers.dev hostname (Cloudflare answers 1042 loop),
+// so the bot database layer calls the bot routes in-process instead of over HTTP.
+async function callWorkerBotApi(env, origin, path, init = {}) {
+  const headers = new Headers(init.headers)
+  headers.set('X-Bot-Secret', env.BOT_API_SECRET)
+  if (init.body && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json')
+  const request = new Request(`${origin}${path}`, {
+    method: init.method || 'GET',
+    headers,
+    body: init.body,
+  })
+  const response = await handleBot(request, env, new URL(request.url).pathname)
+  const result = await response.json()
+  if (!response.ok) throw new Error(result.error || `Bot API returned ${response.status}`)
+  return result
+}
+
 function createWorkerBotDb(env, origin) {
   class Query {
     constructor(table) {
@@ -430,59 +447,39 @@ function createWorkerBotDb(env, origin) {
       return (rows.results || []).map((row) => ({ id: row.id, table_name: row.table_name, row: JSON.parse(row.row_data) }))
     },
     async consumeInvite(code, telegramId, staff = false) {
-      const response = await fetch(`${origin}/api/bot/invite/consume`, {
+      const result = await callWorkerBotApi(env, origin, '/api/bot/invite/consume', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-Bot-Secret': env.BOT_API_SECRET },
         body: JSON.stringify({ code, telegramId, staff }),
       })
-      const result = await response.json()
-      if (!response.ok) throw new Error(result.error || 'Ulash kodini ishlatib bo‘lmadi.')
       return result.data
     },
     async getProfileByTelegram(telegramId) {
-      const response = await fetch(`${origin}/api/bot/profile?telegram_id=${encodeURIComponent(telegramId)}`, {
-        headers: { 'X-Bot-Secret': env.BOT_API_SECRET },
-      })
-      const result = await response.json()
-      if (!response.ok) throw new Error(result.error || 'Profilni aniqlab bo‘lmadi.')
+      const result = await callWorkerBotApi(env, origin, `/api/bot/profile?telegram_id=${encodeURIComponent(telegramId)}`)
       return result.data
     },
     async getStudentHomework(chatId) {
-      const response = await fetch(`${origin}/api/bot/student-homework`, {
+      const result = await callWorkerBotApi(env, origin, '/api/bot/student-homework', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-Bot-Secret': env.BOT_API_SECRET },
         body: JSON.stringify({ chat_id: Number(chatId) }),
       })
-      const result = await response.json()
-      if (!response.ok) throw new Error(result.error || 'Uy vazifalarini yuklab bo‘lmadi.')
       return result.data || []
     },
     async selectHomework(chatId, homeworkId) {
-      const response = await fetch(`${origin}/api/bot/select-homework`, {
+      const result = await callWorkerBotApi(env, origin, '/api/bot/select-homework', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-Bot-Secret': env.BOT_API_SECRET },
         body: JSON.stringify({ chat_id: Number(chatId), homework_id: homeworkId }),
       })
-      const result = await response.json()
-      if (!response.ok) throw new Error(result.error || 'Vazifani tanlab bo‘lmadi.')
       return result.data
     },
     async getPendingHomework(chatId) {
-      const response = await fetch(`${origin}/api/bot/pending-homework?chat_id=${encodeURIComponent(chatId)}`, {
-        headers: { 'X-Bot-Secret': env.BOT_API_SECRET },
-      })
-      const result = await response.json()
-      if (!response.ok) throw new Error(result.error || 'Tanlangan vazifa topilmadi.')
+      const result = await callWorkerBotApi(env, origin, `/api/bot/pending-homework?chat_id=${encodeURIComponent(chatId)}`)
       return result.data
     },
     async submitHomework(values) {
-      const response = await fetch(`${origin}/api/bot/submission`, {
+      const result = await callWorkerBotApi(env, origin, '/api/bot/submission', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-Bot-Secret': env.BOT_API_SECRET },
         body: JSON.stringify(values),
       })
-      const result = await response.json()
-      if (!response.ok) throw new Error(result.error || 'Topshiriqni yuborib bo‘lmadi.')
       return result.data
     },
     async uploadToR2({ fileStream, fileName, mimeType }) {
