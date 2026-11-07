@@ -1,3 +1,17 @@
+import { readFile } from 'node:fs/promises'
+import { resolve } from 'node:path'
+
+const localSecretsPath = resolve(import.meta.dirname, '..', '.env.owner-seed')
+try {
+  const contents = await readFile(localSecretsPath, 'utf8')
+  for (const line of contents.split(/\r?\n/)) {
+    const match = line.match(/^(CLOUDFLARE_API_URL|OWNER_SEED_SECRET)=(.*)$/)
+    if (match && !process.env[match[1]]) process.env[match[1]] = match[2]
+  }
+} catch (error) {
+  if (error?.code !== 'ENOENT') throw error
+}
+
 function required(name) {
   const value = String(process.env[name] || '').trim()
   if (!value) throw new Error(`Missing ${name}.`)

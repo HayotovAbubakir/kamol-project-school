@@ -1324,94 +1324,6 @@ async function handleBot(request, env, pathname) {
   return fail('Bot route not found.', 404)
 }
 
-async function handleMigration(request, env) {
-  if (!env.MIGRATION_SECRET || request.headers.get('X-Migration-Secret') !== env.MIGRATION_SECRET) {
-    return fail('Migration authorization failed.', 401)
-  }
-  const { table, rows, bootstrap_owner_password: ownerPassword } = await request.json()
-  if (!['profiles', 'teachers', 'groups', 'students', 'telegram_links', 'group_students', 'payments', 'salary_payments', 'expenses', 'attendance', 'staff_codes', 'homework', 'homework_submissions'].includes(table)) {
-    return fail('Unknown migration table.', 400)
-  }
-  if (!Array.isArray(rows) || rows.length > 50) return fail('Migration batch must contain at most 50 rows.', 400)
-
-  try {
-    if (table === 'profiles') {
-      for (const profile of rows) {
-        let password = null
-        let salt = null
-        if (profile.role === 'owner' && ownerPassword) {
-          const result = await hashPassword(ownerPassword)
-          password = result.hash
-          salt = result.salt
-        }
-        await env.DB.prepare(`INSERT INTO accounts (id, password_hash, password_salt, password_iterations, password_reset_required)
-          VALUES (?, ?, ?, 120000, ?)
-          ON CONFLICT(id) DO NOTHING`)
-          .bind(profile.id, password, salt, password ? 0 : 1).run()
-        const fields = ['id', 'username', 'name', 'role', 'teacher_id', 'student_id', 'telegram_id', 'created_at']
-          .filter((field) => profile[field] !== undefined && !(field === 'created_at' && profile[field] === null))
-        const values = fields.map((field) => profile[field])
-        const updates = fields.filter((field) => field !== 'id')
-        await env.DB.prepare(`INSERT INTO profiles (${fields.map((field) => `"${field}"`).join(',')})
-          VALUES (${fields.map(() => '?').join(',')})
-          ON CONFLICT(id) DO UPDATE SET ${updates.map((field) => `"${field}"=excluded."${field}"`).join(',')}`)
-          .bind(...values).run()
-      }
-      return json({ imported: rows.length, accounts_created: rows.length })
-    }
-
-    const keyColumns = table === 'telegram_links' ? ['chat_id']
-      : table === 'group_students' ? ['group_id', 'student_id']
-        : ['id']
-    for (const row of rows) {
-      const columns = Object.keys(row).filter((key) => /^[a-z_][a-z0-9_]*$/i.test(key))
-      if (!columns.length) continue
-      const updates = columns.filter((column) => !keyColumns.includes(column))
-      const conflict = `ON CONFLICT(${keyColumns.map((column) => `"${column}"`).join(',')}) DO ${updates.length
-        ? `UPDATE SET ${updates.map((column) => `"${column}"=excluded."${column}"`).join(',')}`
-        : 'NOTHING'}`
-      await env.DB.prepare(`INSERT INTO "${table}" (${columns.map((column) => `"${column}"`).join(',')})
-        VALUES (${columns.map(() => '?').join(',')}) ${conflict}`)
-        .bind(...columns.map((column) => typeof row[column] === 'object' && row[column] !== null ? JSON.stringify(row[column]) : row[column])).run()
-    }
-    return json({ imported: rows.length })
-  } catch (error) {
-    return fail(error instanceof Error ? error.message : String(error), 400)
-  }
-}
-
-async function handleMigrationVerify(request, env) {
-  if (!env.MIGRATION_SECRET || request.headers.get('X-Migration-Secret') !== env.MIGRATION_SECRET) {
-    return fail('Migration authorization failed.', 401)
-  }
-  const parsed = z.object({
-    tables: z.array(z.string().refine((table) => WRITABLE.has(table))).min(1).max(WRITABLE.size),
-  }).safeParse(await request.json())
-  if (!parsed.success) return fail('Invalid migration verification request.', 400)
-  const counts = {}
-  for (const table of parsed.data.tables) {
-    const result = await env.DB.prepare(`SELECT COUNT(*) AS count FROM "${table}"`).first()
-    counts[table] = Number(result?.count || 0)
-  }
-  return json({ counts })
-}
-
-async function handleMigrationFile(request, env) {
-  if (!env.MIGRATION_SECRET || request.headers.get('X-Migration-Secret') !== env.MIGRATION_SECRET) {
-    return fail('Migration authorization failed.', 401)
-  }
-  if (!env.FILES) return fail('R2 binding is not configured.', 503)
-  const key = request.headers.get('X-Object-Key') || ''
-  const mimeType = request.headers.get('Content-Type') || ''
-  if (!key.startsWith('homework/migrated/') || key.includes('..') || key.length > 512) return fail('Invalid migration file key.', 400)
-  if (!['application/pdf', 'image/jpeg', 'image/png', 'image/webp'].includes(mimeType)) return fail('Unsupported file type.', 415)
-  const bytes = await request.arrayBuffer()
-  if (!bytes.byteLength || bytes.byteLength > 10 * 1024 * 1024) return fail('File must be smaller than 10 MB.', 413)
-  if (!validFileBytes(bytes, mimeType)) return fail('File content does not match its type.', 415)
-  await env.FILES.put(key, bytes, { httpMetadata: { contentType: mimeType } })
-  return json({ file_url: await signFileUrl(env, new URL(request.url).origin, key) })
-}
-
 async function handleOwnerSeed(request, env) {
   const configuredSecret = env.OWNER_SEED_SECRET
   const suppliedSecret = request.headers.get('X-Owner-Seed-Secret') || ''
@@ -1467,9 +1379,6 @@ async function handleRequest(request, env) {
   if (!url.pathname.startsWith('/api/')) return env.ASSETS.fetch(request)
   if (url.pathname === '/api/health') return json({ ok: true, service: 'kamol-cloudflare-api' })
   if (url.pathname === '/api/telegram/webhook' && request.method === 'POST') return handleTelegramWebhook(request, env)
-  if (url.pathname === '/api/migrate/import' && request.method === 'POST') return handleMigration(request, env)
-  if (url.pathname === '/api/migrate/verify' && request.method === 'POST') return handleMigrationVerify(request, env)
-  if (url.pathname === '/api/migrate/file' && request.method === 'PUT') return handleMigrationFile(request, env)
   if (url.pathname === '/api/auth/seed-owner' && request.method === 'POST') return handleOwnerSeed(request, env)
   if (url.pathname.startsWith('/api/bot/')) return handleBot(request, env, url.pathname)
   if (url.pathname.startsWith('/api/files/') && request.method === 'GET') return handleFileDownload(request, env)

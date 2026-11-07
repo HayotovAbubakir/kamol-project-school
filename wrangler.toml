@@ -11,7 +11,7 @@ run_worker_first = ["/api/*"]
 [[d1_databases]]
 binding = "DB"
 database_name = "kamol-school-db"
-database_id = "__CLOUDFLARE_D1_DATABASE_ID__"
+database_id = "f1b7121c-7ae3-4e12-a7d5-0a8c2ee93aab"
 migrations_dir = "./migrations"
 
 [triggers]

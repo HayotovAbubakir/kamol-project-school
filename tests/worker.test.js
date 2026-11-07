@@ -95,7 +95,6 @@ beforeAll(async () => {
     FILES: await miniflare.getR2Bucket('FILES'),
     AUTH_SECRET: authSecret,
     BOT_API_SECRET: 'test-bot-secret',
-    MIGRATION_SECRET: 'test-migration-secret',
     OWNER_SEED_SECRET: 'test-seed-secret',
     TELEGRAM_BOT_TOKEN: 'test-telegram-token',
     TELEGRAM_BOT_USERNAME: 'KamolTestBot',
