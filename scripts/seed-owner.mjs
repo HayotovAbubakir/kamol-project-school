@@ -39,3 +39,11 @@ const result = await response.json()
 if (!response.ok) throw new Error(`Owner seed failed (${response.status}): ${result.error || 'unknown error'}`)
 if (result.seeded) console.log(`Created initial owner account: ${result.username}`)
 else console.log('Initial owner already exists; no account was changed.')
+
+const loginResponse = await fetch(`${apiUrl}/api/auth/login`, {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({ username, password }),
+})
+if (!loginResponse.ok) throw new Error(`Owner login verification failed (${loginResponse.status}).`)
+console.log(`Owner login verified: ${username}`)
