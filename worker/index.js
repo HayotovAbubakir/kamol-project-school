@@ -499,12 +499,15 @@ function createWorkerBotDb(env, origin) {
   }
 }
 
-function getWorkerBot(env, origin) {
+async function getWorkerBot(env, origin) {
   if (!env.TELEGRAM_BOT_TOKEN) throw new Error('Telegram bot is not configured.')
   let bot = botInstances.get(env)
   if (!bot) {
     bot = new Bot(env.TELEGRAM_BOT_TOKEN)
-    bot.catch((error) => console.error('Telegram update failed', error.error?.name || 'BotError'))
+    bot.catch((error) => console.error('Telegram update failed', {
+      name: error.error?.name || error.name || 'BotError',
+      message: error.error?.message || error.message || '',
+    }))
     registerHandlers(
       bot,
       createWorkerBotDb(env, origin),
@@ -513,6 +516,9 @@ function getWorkerBot(env, origin) {
     )
     botInstances.set(env, bot)
   }
+  // grammY webhook mode requires bot info before handleUpdate; without init()
+  // every update throws and Telegram only sees a 500 from this Worker.
+  await bot.init()
   return bot
 }
 
@@ -521,8 +527,22 @@ async function handleTelegramWebhook(request, env) {
   if (request.headers.get('X-Telegram-Bot-Api-Secret-Token') !== env.TELEGRAM_WEBHOOK_SECRET) {
     return fail('Telegram webhook authorization failed.', 401)
   }
-  const update = await request.json()
-  await getWorkerBot(env, new URL(request.url).origin).handleUpdate(update)
+  let update
+  try {
+    update = await request.json()
+  } catch {
+    return fail('Telegram update payload is invalid.', 400)
+  }
+  try {
+    const bot = await getWorkerBot(env, new URL(request.url).origin)
+    await bot.handleUpdate(update)
+  } catch (error) {
+    console.error('Telegram webhook failed', {
+      name: error instanceof Error ? error.name : 'UnknownError',
+      message: error instanceof Error ? error.message : '',
+    })
+    return fail('Telegram update failed.', 500)
+  }
   return json({ ok: true })
 }
 
@@ -538,7 +558,7 @@ async function processBotEvents(env) {
   const rows = await env.DB.prepare('SELECT id, table_name, row_data FROM bot_events WHERE id > ? ORDER BY id LIMIT 100')
     .bind(cursor.last_event_id).all()
   if (!rows.results?.length) return
-  const bot = getWorkerBot(env, env.TELEGRAM_WEBAPP_URL ? new URL(env.TELEGRAM_WEBAPP_URL).origin : 'https://localhost')
+  const bot = await getWorkerBot(env, env.TELEGRAM_WEBAPP_URL ? new URL(env.TELEGRAM_WEBAPP_URL).origin : 'https://localhost')
   for (const event of rows.results) {
     const row = JSON.parse(event.row_data)
     if (row.student_id && ['attendance', 'payments'].includes(event.table_name)) {

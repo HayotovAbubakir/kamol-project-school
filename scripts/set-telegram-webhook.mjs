@@ -32,7 +32,8 @@ async function telegram(method, payload) {
 await telegram('setWebhook', {
   url: `${baseUrl}/api/telegram/webhook`,
   secret_token: secret,
-  allowed_updates: ['message'],
+  // callback_query is required for the inline "homework:<id>" selection buttons.
+  allowed_updates: ['message', 'callback_query'],
   drop_pending_updates: false,
 })
 await telegram('setMyCommands', { commands: BOT_COMMANDS })

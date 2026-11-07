@@ -98,6 +98,7 @@ beforeAll(async () => {
     OWNER_SEED_SECRET: 'test-seed-secret',
     TELEGRAM_BOT_TOKEN: 'test-telegram-token',
     TELEGRAM_BOT_USERNAME: 'KamolTestBot',
+    TELEGRAM_WEBHOOK_SECRET: 'test-webhook-secret',
     ASSETS: { fetch: async () => new Response('asset') },
   }
   await seedOwner()
@@ -527,5 +528,71 @@ describe('D1 worker routes and authentication', () => {
     const stored = await env.DB.prepare('SELECT group_id, teacher_id, title FROM homework WHERE id = ?')
       .bind('homework-1').first()
     expect(stored).toEqual({ group_id: ownGroup.id, teacher_id: 'teacher-1', title: 'Updated title' })
+  })
+})
+
+describe('telegram webhook endpoint', () => {
+  function startUpdate(updateId) {
+    return {
+      update_id: updateId,
+      message: {
+        message_id: updateId,
+        date: Math.floor(Date.now() / 1000),
+        chat: { id: 424242, type: 'private' },
+        from: { id: 424242, is_bot: false, first_name: 'Test' },
+        text: '/start',
+        entities: [{ type: 'bot_command', offset: 0, length: 6 }],
+      },
+    }
+  }
+
+  function telegramFetchMock(calls) {
+    return vi.fn(async (input) => {
+      const url = String(input instanceof Request ? input.url : input)
+      calls.push(url)
+      if (url.startsWith('https://school.test/')) return Response.json({ data: null })
+      if (url.endsWith('/getMe')) {
+        return Response.json({ ok: true, result: { id: 99, is_bot: true, first_name: 'Test Bot', username: 'KamolTestBot' } })
+      }
+      if (url.endsWith('/sendMessage')) {
+        return Response.json({ ok: true, result: { message_id: 1, date: 0, chat: { id: 424242, type: 'private' } } })
+      }
+      if (url.endsWith('/setChatMenuButton')) return Response.json({ ok: true, result: true })
+      throw new Error(`Unexpected Telegram API call: ${url.replace(/bot[^/]+/, 'bot<redacted>')}`)
+    })
+  }
+
+  it('handles a /start update instead of failing because the bot was never initialized', async () => {
+    const calls = []
+    vi.stubGlobal('fetch', telegramFetchMock(calls))
+    try {
+      const response = await request('/api/telegram/webhook', {
+        method: 'POST',
+        headers: { 'X-Telegram-Bot-Api-Secret-Token': env.TELEGRAM_WEBHOOK_SECRET },
+        body: startUpdate(1),
+      })
+      expect(response.status).toBe(200)
+      expect(await response.json()).toEqual({ ok: true })
+      expect(calls.some((url) => url.endsWith('/getMe'))).toBe(true)
+      expect(calls.some((url) => url.endsWith('/sendMessage'))).toBe(true)
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it('rejects updates with an invalid secret token without calling the bot API', async () => {
+    const calls = []
+    vi.stubGlobal('fetch', telegramFetchMock(calls))
+    try {
+      const response = await request('/api/telegram/webhook', {
+        method: 'POST',
+        headers: { 'X-Telegram-Bot-Api-Secret-Token': 'wrong-secret' },
+        body: startUpdate(2),
+      })
+      expect(response.status).toBe(401)
+      expect(calls).toEqual([])
+    } finally {
+      vi.unstubAllGlobals()
+    }
   })
 })
