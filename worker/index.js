@@ -9,8 +9,10 @@ const TABLES = new Set([
   'profiles', 'teachers', 'groups', 'students', 'telegram_links', 'group_students',
   'payments', 'salary_payments', 'expenses', 'attendance', 'staff_codes',
   'homework', 'homework_submissions', 'monthly_homework_report',
+  'payment_audit', 'homework_review_history',
 ])
-const WRITABLE = new Set([...TABLES].filter((table) => table !== 'monthly_homework_report'))
+const READ_ONLY = new Set(['monthly_homework_report', 'payment_audit', 'homework_review_history'])
+const WRITABLE = new Set([...TABLES].filter((table) => !READ_ONLY.has(table)))
 const STAFF = new Set(['owner', 'admin', 'reception'])
 const OWNER_ONLY = new Set(['salary_payments', 'expenses', 'staff_codes'])
 const PASSWORD_ITERATIONS = 100000
@@ -21,14 +23,16 @@ const COLUMNS = {
   students: ['id', 'name', 'phone', 'parent_phone', 'monthly_fee', 'joined_at', 'public_code', 'login', 'auth_user_id', 'telegram_id', 'created_at'],
   telegram_links: ['chat_id', 'student_id', 'linked_at'],
   group_students: ['group_id', 'student_id'],
-  payments: ['id', 'student_id', 'student_name', 'amount', 'month', 'year', 'paid_at', 'created_at'],
+  payments: ['id', 'student_id', 'student_name', 'amount', 'month', 'year', 'paid_at', 'method', 'note', 'voided_at', 'voided_by', 'void_reason', 'updated_at', 'updated_by', 'created_at'],
   salary_payments: ['id', 'teacher_id', 'amount', 'paid_at', 'created_at'],
   expenses: ['id', 'title', 'amount', 'category', 'date', 'recorded_by', 'created_at'],
   attendance: ['id', 'student_id', 'group_id', 'date', 'status', 'note', 'marked_by', 'marked_at'],
   staff_codes: ['id', 'code', 'role', 'user_id', 'created_by', 'is_active', 'created_at'],
   homework: ['id', 'group_id', 'teacher_id', 'title', 'description', 'due_at', 'deadline', 'file_url', 'created_at', 'updated_at'],
-  homework_submissions: ['id', 'homework_id', 'student_id', 'file_url', 'text_answer', 'content_text', 'status', 'feedback', 'review_note', 'submitted_at', 'reviewed_by', 'reviewed_at', 'created_at'],
+  homework_submissions: ['id', 'homework_id', 'student_id', 'file_url', 'text_answer', 'content_text', 'video_note_url', 'voice_url', 'status', 'feedback', 'review_note', 'submitted_at', 'reviewed_by', 'reviewed_at', 'created_at'],
   monthly_homework_report: ['student_id', 'student_name', 'month_start', 'total_submissions', 'approved_count', 'rejected_count', 'pending_count'],
+  payment_audit: ['id', 'payment_id', 'action', 'actor_id', 'actor_name', 'reason', 'old_data', 'new_data', 'created_at'],
+  homework_review_history: ['id', 'submission_id', 'homework_id', 'student_id', 'reviewer_id', 'reviewer_name', 'old_status', 'new_status', 'old_comment', 'new_comment', 'created_at'],
 }
 const encoder = new TextEncoder()
 const botInstances = new WeakMap()
@@ -79,7 +83,11 @@ export function canAccessTable(profile, table, action) {
   if (table === 'monthly_homework_report') return ['admin', 'reception'].includes(role) && action === 'select'
   if (table === 'payments') {
     if (role === 'student') return action === 'select'
-    return ['admin', 'reception'].includes(role) && ['select', 'insert', 'upsert'].includes(action)
+    // Reception may correct and void payments; permanent delete stays owner-only.
+    return ['admin', 'reception'].includes(role) && ['select', 'insert', 'upsert', 'update'].includes(action)
+  }
+  if (['payment_audit', 'homework_review_history'].includes(table)) {
+    return ['admin', 'reception', 'teacher'].includes(role) && action === 'select'
   }
   if (table === 'profiles') return action === 'select' && ['admin', 'reception', 'teacher', 'student'].includes(role)
   if (['salary_payments', 'expenses', 'staff_codes'].includes(table)) return false
@@ -353,6 +361,10 @@ function validFileBytes(bytes, mimeType) {
   if (mimeType === 'image/jpeg') return header[0] === 255 && header[1] === 216 && header[2] === 255
   if (mimeType === 'image/webp') return new TextDecoder().decode(header.slice(0, 4)) === 'RIFF'
     && new TextDecoder().decode(header.slice(8, 12)) === 'WEBP'
+  if (mimeType === 'video/mp4' || mimeType === 'audio/mp4') return new TextDecoder().decode(header.slice(4, 8)) === 'ftyp'
+  if (mimeType === 'audio/ogg') return new TextDecoder().decode(header.slice(0, 4)) === 'OggS'
+  if (mimeType === 'video/webm' || mimeType === 'audio/webm') return header[0] === 0x1a && header[1] === 0x45 && header[2] === 0xdf && header[3] === 0xa3
+  if (mimeType === 'audio/mpeg') return new TextDecoder().decode(header.slice(0, 3)) === 'ID3' || (header[0] === 0xff && (header[1] & 0xe0) === 0xe0)
   return false
 }
 
@@ -902,7 +914,10 @@ async function mutateRows(env, profile, body, service) {
       continue
     }
     const patch = { ...values }
+    const auditReason = table === 'payments' && typeof patch.reason === 'string' ? patch.reason : ''
+    if (table === 'payments') delete patch.reason
     if (Object.keys(patch).some((column) => !allowedColumns.has(column))) throw new Error('Invalid columns')
+    if (!service && table === 'payments' && row.voided_at) throw new Error('Bekor qilingan to‘lovni tuzatib bo‘lmaydi.')
     if (!service && table === 'profiles') {
       for (const forbidden of ['role', 'id', 'teacher_id', 'student_id']) delete patch[forbidden]
     }
@@ -936,6 +951,16 @@ async function mutateRows(env, profile, body, service) {
       : table === 'telegram_links' ? ['chat_id'] : ['id']
     await env.DB.prepare(`UPDATE "${table}" SET ${columns.map((column) => `"${column}" = ?`).join(',')} WHERE ${primary.map((column) => `"${column}" = ?`).join(' AND ')}`)
       .bind(...columns.map((column) => typeof patch[column] === 'object' && patch[column] !== null ? JSON.stringify(patch[column]) : patch[column]), ...primary.map((column) => row[column])).run()
+    if (!service && table === 'payments') {
+      await recordPaymentAudit(env, {
+        action: 'corrected',
+        paymentId: row.id,
+        actor: profile,
+        reason: auditReason,
+        oldData: paymentSnapshot(row),
+        newData: paymentSnapshot({ ...row, ...patch }),
+      })
+    }
     affected.push({ ...row, ...patch })
   }
   return body.returning ? affected : null
@@ -1332,7 +1357,7 @@ async function handleBot(request, env, pathname) {
     const file = form.get('file')
     const filename = String(form.get('filename') || file?.name || 'homework-file').replace(/[^a-zA-Z0-9._-]/g, '-')
     if (!(file instanceof File) || file.size <= 0 || file.size > 10 * 1024 * 1024) return fail('File must be smaller than 10 MB.')
-    if (!['application/pdf', 'image/jpeg', 'image/png', 'image/webp'].includes(file.type)) return fail('Unsupported file type.', 415)
+    if (!['application/pdf', 'image/jpeg', 'image/png', 'image/webp', 'video/mp4', 'video/webm', 'audio/ogg', 'audio/mpeg', 'audio/mp4', 'audio/webm'].includes(file.type)) return fail('Unsupported file type.', 415)
     const bytes = await file.arrayBuffer()
     if (!validFileBytes(bytes, file.type)) return fail('File content does not match its type.', 415)
     const key = `homework/${crypto.randomUUID()}-${filename}`
@@ -1381,7 +1406,7 @@ async function handleFinanceSummary(request, env, profile) {
     && new Date(`${value}T00:00:00.000Z`).toISOString().slice(0, 10) === value
   if (!isDate(from) || !isDate(to) || from > to) return fail('Invalid date range.', 400)
   const [payments, salaries, expenses] = await Promise.all([
-    env.DB.prepare('SELECT amount FROM payments WHERE substr(paid_at, 1, 10) BETWEEN ? AND ?').bind(from, to).all(),
+    env.DB.prepare('SELECT amount FROM payments WHERE voided_at IS NULL AND substr(paid_at, 1, 10) BETWEEN ? AND ?').bind(from, to).all(),
     env.DB.prepare('SELECT amount FROM salary_payments WHERE substr(paid_at, 1, 10) BETWEEN ? AND ?').bind(from, to).all(),
     env.DB.prepare('SELECT amount FROM expenses WHERE date BETWEEN ? AND ?').bind(from, to).all(),
   ])
@@ -1390,6 +1415,184 @@ async function handleFinanceSummary(request, env, profile) {
     salaries: salaries.results || [],
     expenses: expenses.results || [],
   }))
+}
+
+const PAYMENT_METHODS = ['cash', 'card', 'transfer']
+
+function isCompleteSubmission(row) {
+  if (!row) return false
+  const hasContent = Boolean(String(row.file_url || '').trim() || String(row.content_text || row.text_answer || '').trim())
+  const hasMedia = Boolean(String(row.video_note_url || '').trim() || String(row.voice_url || '').trim())
+  return hasContent && hasMedia
+}
+
+function paymentSnapshot(row) {
+  return {
+    student_id: row.student_id,
+    student_name: row.student_name,
+    amount: row.amount,
+    month: row.month,
+    year: row.year,
+    paid_at: row.paid_at,
+    method: row.method,
+    note: row.note,
+  }
+}
+
+async function recordPaymentAudit(env, { action, paymentId, actor, reason = '', oldData, newData }) {
+  await env.DB.prepare(`INSERT INTO payment_audit (id, payment_id, action, actor_id, actor_name, reason, old_data, new_data, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`).bind(
+    crypto.randomUUID(), paymentId, action, actor?.id || null, actor?.name || '',
+    String(reason || '').slice(0, 500), JSON.stringify(oldData || {}), JSON.stringify(newData || {}),
+    new Date().toISOString(),
+  ).run()
+}
+
+async function correctPayment(request, env, profile) {
+  if (!STAFF.has(profile?.role)) return fail('Ruxsat yo‘q.', 403)
+  const parsed = z.object({
+    id: z.string().min(1).max(64),
+    amount: z.number().positive().optional(),
+    month: z.number().int().min(1).max(12).optional(),
+    year: z.number().int().min(2000).max(2100).optional(),
+    paid_at: z.string().min(1).max(40).optional(),
+    method: z.enum(PAYMENT_METHODS).optional(),
+    note: z.string().max(500).optional(),
+    reason: z.string().max(500).optional(),
+  }).strict().safeParse(await request.json())
+  if (!parsed.success) return fail('To‘lov ma’lumotlari noto‘g‘ri.', 400)
+  const payment = await env.DB.prepare('SELECT * FROM payments WHERE id = ?').bind(parsed.data.id).first()
+  if (!payment) return fail('To‘lov topilmadi.', 404)
+  if (payment.voided_at) return fail('Bekor qilingan to‘lovni tuzatib bo‘lmaydi.', 409)
+  const patch = {}
+  for (const key of ['amount', 'month', 'year', 'paid_at', 'method', 'note']) {
+    if (parsed.data[key] !== undefined) patch[key] = parsed.data[key]
+  }
+  if (!Object.keys(patch).length) return fail('Tuzatish uchun ma’lumot yo‘q.', 400)
+  if (patch.paid_at && Number.isNaN(Date.parse(patch.paid_at))) return fail('Sana noto‘g‘ri.', 400)
+  const now = new Date().toISOString()
+  const columns = Object.keys(patch)
+  await env.DB.prepare(`UPDATE payments SET ${columns.map((column) => `"${column}" = ?`).join(', ')}, updated_at = ?, updated_by = ? WHERE id = ?`)
+    .bind(...columns.map((column) => patch[column]), now, profile.id, payment.id).run()
+  const next = { ...payment, ...patch, updated_at: now, updated_by: profile.id }
+  await recordPaymentAudit(env, {
+    action: 'corrected', paymentId: payment.id, actor: profile,
+    reason: parsed.data.reason || '', oldData: paymentSnapshot(payment), newData: paymentSnapshot(next),
+  })
+  return json({ data: paymentSnapshot(next) })
+}
+
+async function voidPayment(request, env, profile) {
+  if (!STAFF.has(profile?.role)) return fail('Ruxsat yo‘q.', 403)
+  const parsed = z.object({
+    id: z.string().min(1).max(64),
+    reason: z.string().trim().min(3).max(500),
+  }).strict().safeParse(await request.json())
+  if (!parsed.success) return fail('Bekor qilish sababi majburiy.', 400)
+  const payment = await env.DB.prepare('SELECT * FROM payments WHERE id = ?').bind(parsed.data.id).first()
+  if (!payment) return fail('To‘lov topilmadi.', 404)
+  if (payment.voided_at) return fail('To‘lov allaqachon bekor qilingan.', 409)
+  const now = new Date().toISOString()
+  await env.DB.prepare('UPDATE payments SET voided_at = ?, voided_by = ?, void_reason = ?, updated_at = ?, updated_by = ? WHERE id = ?')
+    .bind(now, profile.id, parsed.data.reason, now, profile.id, payment.id).run()
+  const next = { ...payment, voided_at: now, voided_by: profile.id, void_reason: parsed.data.reason }
+  await recordPaymentAudit(env, {
+    action: 'voided', paymentId: payment.id, actor: profile,
+    reason: parsed.data.reason, oldData: paymentSnapshot(payment),
+    newData: { ...paymentSnapshot(next), void_reason: parsed.data.reason, voided_at: now },
+  })
+  return json({ data: { id: payment.id, voided_at: now, void_reason: parsed.data.reason } })
+}
+
+async function paymentsHistory(request, env, profile) {
+  if (!STAFF.has(profile?.role)) return fail('Ruxsat yo‘q.', 403)
+  const paymentId = new URL(request.url).searchParams.get('payment_id')
+  const rows = paymentId
+    ? await env.DB.prepare('SELECT * FROM payment_audit WHERE payment_id = ? ORDER BY created_at DESC LIMIT 200').bind(paymentId).all()
+    : await env.DB.prepare('SELECT * FROM payment_audit ORDER BY created_at DESC LIMIT 200').all()
+  return json({ data: rows.results || [] })
+}
+
+async function reviewHomeworkSubmission(request, env, profile) {
+  if (!profile) return fail('Login required.', 401)
+  const parsed = z.object({
+    submission_id: z.string().min(1).max(64).optional(),
+    homework_id: z.string().min(1).max(64).optional(),
+    student_id: z.string().min(1).max(64).optional(),
+    status: z.enum(['approved', 'rejected']),
+    comment: z.string().max(1000).optional(),
+  }).strict().safeParse(await request.json())
+  if (!parsed.success) return fail('Natija noto‘g‘ri.', 400)
+
+  let submission
+  if (parsed.data.submission_id) {
+    submission = await env.DB.prepare('SELECT * FROM homework_submissions WHERE id = ?')
+      .bind(parsed.data.submission_id).first()
+    if (!submission) return fail('Topshiriq topilmadi.', 404)
+  } else if (parsed.data.homework_id && parsed.data.student_id) {
+    submission = await env.DB.prepare('SELECT * FROM homework_submissions WHERE homework_id = ? AND student_id = ?')
+      .bind(parsed.data.homework_id, parsed.data.student_id).first()
+  } else {
+    return fail('Topshiriq yoki o‘quvchi ko‘rsatilmagan.', 400)
+  }
+
+  const homeworkId = submission?.homework_id || parsed.data.homework_id
+  const studentId = submission?.student_id || parsed.data.student_id
+  const homework = await env.DB.prepare('SELECT * FROM homework WHERE id = ?').bind(homeworkId).first()
+  if (!homework) return fail('Uy vazifasi topilmadi.', 404)
+
+  const allowed = profile.role === 'owner'
+    || (profile.role === 'teacher' && homework.teacher_id === profile.teacher_id)
+  if (!allowed) return fail('Faqat o‘qituvchi natijani belgilay oladi.', 403)
+
+  if (parsed.data.status === 'approved' && !isCompleteSubmission(submission)) {
+    return fail('Topshiriq to‘liq emas: matn yoki fayl va bitta video yoki ovozli xabar kerak.', 400)
+  }
+
+  const now = new Date().toISOString()
+  const comment = String(parsed.data.comment || '').trim()
+  let nextSubmission
+  if (!submission) {
+    const id = crypto.randomUUID()
+    await env.DB.prepare(`INSERT INTO homework_submissions (id, homework_id, student_id, status, feedback, review_note, reviewed_by, reviewed_at, submitted_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`).bind(id, homeworkId, studentId, parsed.data.status, comment, comment, profile.id, now, now).run()
+    nextSubmission = await env.DB.prepare('SELECT * FROM homework_submissions WHERE id = ?').bind(id).first()
+  } else {
+    await env.DB.prepare('UPDATE homework_submissions SET status = ?, feedback = ?, review_note = ?, reviewed_by = ?, reviewed_at = ? WHERE id = ?')
+      .bind(parsed.data.status, comment, comment, profile.id, now, submission.id).run()
+    nextSubmission = { ...submission, status: parsed.data.status, feedback: comment, review_note: comment, reviewed_by: profile.id, reviewed_at: now }
+  }
+
+  await env.DB.prepare(`INSERT INTO homework_review_history (id, submission_id, homework_id, student_id, reviewer_id, reviewer_name, old_status, new_status, old_comment, new_comment, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).bind(
+    crypto.randomUUID(), nextSubmission.id, homeworkId, studentId, profile.id, profile.name || '',
+    submission?.status || null, parsed.data.status, submission?.feedback || '', comment, now,
+  ).run()
+  return json({ data: { id: nextSubmission.id, status: parsed.data.status, comment } })
+}
+
+async function homeworkHistory(request, env, profile) {
+  if (!profile) return fail('Login required.', 401)
+  const url = new URL(request.url)
+  const submissionId = url.searchParams.get('submission_id')
+  const homeworkId = url.searchParams.get('homework_id')
+  if (!submissionId && !homeworkId) return fail('Topshiriq ko‘rsatilmagan.', 400)
+  const rows = submissionId
+    ? await env.DB.prepare('SELECT * FROM homework_review_history WHERE submission_id = ? ORDER BY created_at DESC LIMIT 100').bind(submissionId).all()
+    : await env.DB.prepare('SELECT * FROM homework_review_history WHERE homework_id = ? ORDER BY created_at DESC LIMIT 200').bind(homeworkId).all()
+  const role = profile.role
+  if (role === 'student') {
+    return json({ data: (rows.results || []).filter((row) => row.student_id === profile.student_id) })
+  }
+  if (role === 'teacher') {
+    const homework = homeworkId
+      ? await env.DB.prepare('SELECT teacher_id FROM homework WHERE id = ?').bind(homeworkId).first()
+      : null
+    if (homework && homework.teacher_id !== profile.teacher_id) return fail('Ruxsat yo‘q.', 403)
+    return json({ data: rows.results || [] })
+  }
+  if (!STAFF.has(role)) return fail('Ruxsat yo‘q.', 403)
+  return json({ data: rows.results || [] })
 }
 
 async function handleRequest(request, env) {
@@ -1443,6 +1646,26 @@ async function handleRequest(request, env) {
   if (url.pathname === '/api/finance/summary' && request.method === 'GET') {
     return handleFinanceSummary(request, env, profile)
   }
+  if (url.pathname === '/api/payments/correct' && request.method === 'POST') {
+    if (!profile) return fail('Login required.', 401)
+    return correctPayment(request, env, profile)
+  }
+  if (url.pathname === '/api/payments/void' && request.method === 'POST') {
+    if (!profile) return fail('Login required.', 401)
+    return voidPayment(request, env, profile)
+  }
+  if (url.pathname === '/api/payments/history' && request.method === 'GET') {
+    if (!profile) return fail('Login required.', 401)
+    return paymentsHistory(request, env, profile)
+  }
+  if (url.pathname === '/api/homework/review' && request.method === 'POST') {
+    if (!profile) return fail('Login required.', 401)
+    return reviewHomeworkSubmission(request, env, profile)
+  }
+  if (url.pathname === '/api/homework/history' && request.method === 'GET') {
+    if (!profile) return fail('Login required.', 401)
+    return homeworkHistory(request, env, profile)
+  }
   if (url.pathname.startsWith('/api/rpc/')) {
     if (!profile) return fail('Login required.', 401)
     return handleRpc(request, env, profile, url.pathname.split('/').pop())
@@ -1456,7 +1679,7 @@ async function handleRequest(request, env) {
     const homeworkId = String(form.get('homework_id') || '')
     const groupId = String(form.get('group_id') || '')
     if (!(file instanceof File) || file.size <= 0 || file.size > 10 * 1024 * 1024) return fail('File must be smaller than 10 MB.')
-    if (!['application/pdf', 'image/jpeg', 'image/png', 'image/webp'].includes(file.type)) return fail('Unsupported file type.', 415)
+    if (!['application/pdf', 'image/jpeg', 'image/png', 'image/webp', 'video/mp4', 'video/webm', 'audio/ogg', 'audio/mpeg', 'audio/mp4', 'audio/webm'].includes(file.type)) return fail('Unsupported file type.', 415)
     const bytes = await file.arrayBuffer()
     if (!validFileBytes(bytes, file.type)) return fail('File content does not match its type.', 415)
     if (homeworkId) {

@@ -22,8 +22,8 @@ async function uploadFile(file, context) {
   if (file.size <= 0 || file.size > 10 * 1024 * 1024) {
     throw new Error('Fayl hajmi 10 MB dan oshmasligi kerak.')
   }
-  if (!['application/pdf', 'image/jpeg', 'image/png', 'image/webp'].includes(file.type)) {
-    throw new Error('Faqat PDF, JPG, PNG yoki WebP fayl yuborish mumkin.')
+  if (!['application/pdf', 'image/jpeg', 'image/png', 'image/webp', 'video/mp4', 'video/webm', 'audio/ogg', 'audio/mpeg', 'audio/mp4', 'audio/webm'].includes(file.type)) {
+    throw new Error('Faqat PDF, rasm, video yoki ovozli fayl yuborish mumkin.')
   }
   const { data: sessionData } = await cloudflare.auth.getSession()
   if (!sessionData.session?.access_token) throw new Error('Fayl yuklash uchun tizimga kiring.')
@@ -59,7 +59,7 @@ export async function loadHomeworks(profile) {
       .limit(100))
     if (!homeworks.length) return []
     const submissions = unwrap(await cloudflare.from('homework_submissions')
-      .select('id, homework_id, content_text, file_url, status, feedback, submitted_at')
+      .select('id, homework_id, content_text, file_url, video_note_url, voice_url, status, feedback, submitted_at')
       .eq('student_id', profile.student_id)
       .in('homework_id', homeworks.map((task) => task.id))
       .limit(500))
@@ -76,7 +76,7 @@ export async function loadHomeworks(profile) {
   if (!homeworks.length) return []
 
   const submissions = unwrap(await cloudflare.from('homework_submissions')
-    .select('id, homework_id, student_id, content_text, file_url, status, feedback, submitted_at, students(name)')
+    .select('id, homework_id, student_id, content_text, file_url, video_note_url, voice_url, status, feedback, submitted_at, students(name)')
     .in('homework_id', homeworks.map((task) => task.id))
     .order('submitted_at', { ascending: false })
     .limit(500))
@@ -126,12 +126,16 @@ export async function submitHomework(profile, homework, input) {
   assertConfigured()
   if (!profile.student_id) throw new Error('O‘quvchi profili bazaga bog‘lanmagan.')
   const fileUrl = await uploadFile(input.file, { homeworkId: homework.id })
+  const videoUrl = await uploadFile(input.videoNote, { homeworkId: homework.id })
+  const voiceUrl = await uploadFile(input.voice, { homeworkId: homework.id })
   const { error } = await cloudflare.from('homework_submissions').upsert({
     homework_id: homework.id,
     student_id: profile.student_id,
     content_text: input.text.trim(),
     text_answer: input.text.trim(),
     file_url: fileUrl || homework.submission?.file_url || null,
+    video_note_url: videoUrl || homework.submission?.video_note_url || null,
+    voice_url: voiceUrl || homework.submission?.voice_url || null,
     status: 'pending',
     feedback: '',
     review_note: '',
@@ -142,16 +146,31 @@ export async function submitHomework(profile, homework, input) {
   if (error) throw error
 }
 
-export async function reviewSubmission(id, status, feedback, reviewerId) {
+async function reviewRequest(path, options) {
+  const { data: sessionData } = await cloudflare.auth.getSession()
+  const token = sessionData.session?.access_token
+  if (!token) throw new Error('Davom etish uchun tizimga kiring.')
+  const response = await fetch(path, {
+    method: options?.method || 'GET',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: options?.body ? JSON.stringify(options.body) : undefined,
+  })
+  const result = await response.json()
+  if (!response.ok) throw new Error(result.error || 'So‘rovni bajarib bo‘lmadi.')
+  return result.data
+}
+
+export async function reviewSubmission(id, status, feedback) {
   assertConfigured()
-  const { error } = await cloudflare.from('homework_submissions').update({
-    status,
-    feedback: feedback.trim(),
-    review_note: feedback.trim(),
-    reviewed_at: new Date().toISOString(),
-    reviewed_by: reviewerId,
-  }).eq('id', id)
-  if (error) throw error
+  return reviewRequest('/api/homework/review', {
+    method: 'POST',
+    body: { submission_id: id, status, comment: String(feedback || '').trim() },
+  })
+}
+
+export async function loadReviewHistory(submissionId) {
+  assertConfigured()
+  return reviewRequest(`/api/homework/history?submission_id=${encodeURIComponent(submissionId)}`)
 }
 
 export async function loadStudents(profile) {

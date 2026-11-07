@@ -97,6 +97,12 @@ function mapPayment(row) {
     month: row.month,
     year: row.year,
     paidAt: row.paid_at,
+    method: row.method || 'cash',
+    note: row.note || '',
+    voidedAt: row.voided_at || null,
+    voidedBy: row.voided_by || null,
+    voidReason: row.void_reason || '',
+    updatedAt: row.updated_at || null,
   }
 }
 
@@ -661,6 +667,12 @@ export async function deleteGroup(id) {
   if (error) throw error
 }
 
+export async function deletePayment(id) {
+  const db = requireClient()
+  const { error } = await db.from('payments').delete().eq('id', id)
+  if (error) throw error
+}
+
 export async function addPayment(payload) {
   const db = requireClient()
   const amount = Number(payload.amount)
@@ -690,6 +702,33 @@ export async function addPayment(payload) {
     paid_at: payload.paidAt || new Date().toISOString(),
   })
   if (error) throw error
+}
+
+async function paymentRequest(path, options = {}) {
+  const { data } = await requireClient().auth.getSession()
+  const token = data.session?.access_token
+  if (!token) throw new Error(translate('domain.error.dataLoadFailed'))
+  const response = await fetch(path, {
+    method: options.method || 'GET',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: options.body ? JSON.stringify(options.body) : undefined,
+  })
+  const result = await response.json()
+  if (!response.ok) throw new Error(result.error || translate('domain.error.dataLoadFailed'))
+  return result.data
+}
+
+export async function correctPayment(payload) {
+  return paymentRequest('/api/payments/correct', { method: 'POST', body: payload })
+}
+
+export async function voidPayment(payload) {
+  return paymentRequest('/api/payments/void', { method: 'POST', body: payload })
+}
+
+export async function paymentHistory(paymentId) {
+  const query = paymentId ? `?payment_id=${encodeURIComponent(paymentId)}` : ''
+  return paymentRequest(`/api/payments/history${query}`)
 }
 
 export async function addSalaryPayment(payload) {

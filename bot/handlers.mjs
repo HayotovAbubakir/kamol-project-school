@@ -100,9 +100,11 @@ async function handleUploadMessage(ctx, db, token) {
     return
   }
 
-  const file = ctx.message.document || ctx.message.photo?.at(-1)
+  const videoNote = ctx.message.video_note
+  const voice = ctx.message.voice
+  const file = videoNote || voice || ctx.message.document || ctx.message.photo?.at(-1)
   if (!file) {
-    await ctx.reply('Rasm yoki PDF faylini yuboring.')
+    await ctx.reply('Matn yoki fayl bilan birga bitta video yoki ovozli xabar yuboring.')
     return
   }
 
@@ -135,13 +137,15 @@ async function handleUploadMessage(ctx, db, token) {
         : /\.webp$/i.test(fileName)
           ? 'image/webp'
           : ''
-  const allowedTypes = ['application/pdf', 'image/jpeg', 'image/png', 'image/webp']
+  const allowedTypes = ['application/pdf', 'image/jpeg', 'image/png', 'image/webp', 'video/mp4', 'audio/ogg', 'audio/mpeg', 'audio/mp4']
   const documentType = ctx.message.document?.mime_type
-  const contentType = ctx.message.photo
-    ? 'image/jpeg'
-    : allowedTypes.includes(documentType) ? documentType : inferredType
+  const mediaType = videoNote ? 'video/mp4' : voice ? (voice.mime_type || 'audio/ogg') : ''
+  const contentType = mediaType
+    || (ctx.message.photo
+      ? 'image/jpeg'
+      : allowedTypes.includes(documentType) ? documentType : inferredType)
   if (!allowedTypes.includes(contentType)) {
-    await ctx.reply('Faqat PDF yoki JPG, PNG, WebP rasm yuborish mumkin.')
+    await ctx.reply('Matn/fayl va bitta video yoki ovozli xabar yuborish mumkin.')
     return
   }
   if (file.file_size > 10 * 1024 * 1024) {
@@ -167,7 +171,7 @@ async function handleUploadMessage(ctx, db, token) {
   })
 
   await saveHomeworkSubmission(db, existing.students.id, targetHomework.homework_id || targetHomework.id, {
-    file_url: r2Result.url,
+    ...(videoNote ? { video_note_url: r2Result.url } : voice ? { voice_url: r2Result.url } : { file_url: r2Result.url }),
     text_answer: '',
     status: 'pending',
     chat_id: chatId,
@@ -324,6 +328,18 @@ export function registerHandlers(bot, db, webAppUrl, token) {
   })
 
   bot.on('message:photo', async (ctx) => {
+    await safeReply(ctx, async () => {
+      await handleUploadMessage(ctx, db, token)
+    })
+  })
+
+  bot.on('message:video_note', async (ctx) => {
+    await safeReply(ctx, async () => {
+      await handleUploadMessage(ctx, db, token)
+    })
+  })
+
+  bot.on('message:voice', async (ctx) => {
     await safeReply(ctx, async () => {
       await handleUploadMessage(ctx, db, token)
     })

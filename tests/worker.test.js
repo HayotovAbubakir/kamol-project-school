@@ -82,10 +82,12 @@ beforeAll(async () => {
     'CREATE TABLE group_students (group_id TEXT NOT NULL, student_id TEXT NOT NULL, PRIMARY KEY (group_id, student_id))',
     "CREATE TABLE groups (id TEXT PRIMARY KEY, name TEXT NOT NULL, teacher_id TEXT, monthly_fee REAL NOT NULL DEFAULT 0, schedule TEXT NOT NULL DEFAULT '[]', created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)",
     "CREATE TABLE homework (id TEXT PRIMARY KEY, group_id TEXT NOT NULL, teacher_id TEXT, title TEXT NOT NULL, description TEXT NOT NULL DEFAULT '', due_at TEXT, deadline TEXT, file_url TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP, updated_at TEXT DEFAULT CURRENT_TIMESTAMP)",
-    'CREATE TABLE homework_submissions (id TEXT PRIMARY KEY, homework_id TEXT NOT NULL, student_id TEXT NOT NULL, file_url TEXT, text_answer TEXT NOT NULL DEFAULT \'\', content_text TEXT NOT NULL DEFAULT \'\', status TEXT NOT NULL DEFAULT \'pending\', feedback TEXT NOT NULL DEFAULT \'\', review_note TEXT NOT NULL DEFAULT \'\', submitted_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, reviewed_by TEXT, reviewed_at TEXT, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, UNIQUE(homework_id, student_id))',
+    'CREATE TABLE homework_submissions (id TEXT PRIMARY KEY, homework_id TEXT NOT NULL, student_id TEXT NOT NULL, file_url TEXT, text_answer TEXT NOT NULL DEFAULT \'\', content_text TEXT NOT NULL DEFAULT \'\', video_note_url TEXT, voice_url TEXT, status TEXT NOT NULL DEFAULT \'pending\', feedback TEXT NOT NULL DEFAULT \'\', review_note TEXT NOT NULL DEFAULT \'\', submitted_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, reviewed_by TEXT, reviewed_at TEXT, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, UNIQUE(homework_id, student_id))',
+    'CREATE TABLE homework_review_history (id TEXT PRIMARY KEY, submission_id TEXT NOT NULL, homework_id TEXT NOT NULL, student_id TEXT NOT NULL, reviewer_id TEXT, reviewer_name TEXT NOT NULL DEFAULT \'\', old_status TEXT, new_status TEXT NOT NULL, old_comment TEXT NOT NULL DEFAULT \'\', new_comment TEXT NOT NULL DEFAULT \'\', created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)',
     'CREATE TABLE telegram_invites (code_hash TEXT PRIMARY KEY, profile_id TEXT NOT NULL REFERENCES profiles(id), created_by TEXT NOT NULL REFERENCES profiles(id), expires_at INTEGER NOT NULL, used_at INTEGER, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)',
     'CREATE TABLE bot_pending_homework (chat_id INTEGER PRIMARY KEY, homework_id TEXT NOT NULL, expires_at INTEGER NOT NULL)',
-    'CREATE TABLE payments (id TEXT PRIMARY KEY, student_id TEXT, student_name TEXT NOT NULL DEFAULT \'\', amount REAL NOT NULL, month INTEGER NOT NULL, year INTEGER NOT NULL, paid_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)',
+    'CREATE TABLE payments (id TEXT PRIMARY KEY, student_id TEXT, student_name TEXT NOT NULL DEFAULT \'\', amount REAL NOT NULL, month INTEGER NOT NULL, year INTEGER NOT NULL, paid_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, method TEXT NOT NULL DEFAULT \'cash\', note TEXT NOT NULL DEFAULT \'\', voided_at TEXT, voided_by TEXT, void_reason TEXT NOT NULL DEFAULT \'\', updated_at TEXT, updated_by TEXT, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)',
+    'CREATE TABLE payment_audit (id TEXT PRIMARY KEY, payment_id TEXT NOT NULL, action TEXT NOT NULL, actor_id TEXT, actor_name TEXT NOT NULL DEFAULT \'\', reason TEXT NOT NULL DEFAULT \'\', old_data TEXT NOT NULL DEFAULT \'{}\', new_data TEXT NOT NULL DEFAULT \'{}\', created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)',
     'CREATE TABLE salary_payments (id TEXT PRIMARY KEY, teacher_id TEXT NOT NULL, amount REAL NOT NULL, paid_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)',
     "CREATE TABLE expenses (id TEXT PRIMARY KEY, title TEXT NOT NULL, amount REAL NOT NULL, category TEXT NOT NULL DEFAULT 'Operatsion', date TEXT NOT NULL DEFAULT (date('now')), recorded_by TEXT, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)",
   ]
@@ -154,13 +156,13 @@ describe('server permission rules', () => {
       owner: Object.fromEntries(tables.map((table) => [table, actions])),
       admin: {
         profiles: ['select'], teachers: actions, groups: actions, students: actions,
-        telegram_links: actions, group_students: actions, payments: ['select', 'insert', 'upsert'],
+        telegram_links: actions, group_students: actions, payments: ['select', 'insert', 'upsert', 'update'],
         attendance: actions, homework: actions, homework_submissions: actions,
         monthly_homework_report: ['select'],
       },
       reception: {
         profiles: ['select'], teachers: actions, groups: actions, students: actions,
-        telegram_links: actions, group_students: actions, payments: ['select', 'insert', 'upsert'],
+        telegram_links: actions, group_students: actions, payments: ['select', 'insert', 'upsert', 'update'],
         attendance: actions, homework: actions, homework_submissions: actions,
         monthly_homework_report: ['select'],
       },
@@ -528,6 +530,146 @@ describe('D1 worker routes and authentication', () => {
     const stored = await env.DB.prepare('SELECT group_id, teacher_id, title FROM homework WHERE id = ?')
       .bind('homework-1').first()
     expect(stored).toEqual({ group_id: ownGroup.id, teacher_id: 'teacher-1', title: 'Updated title' })
+  })
+})
+
+describe('payment corrections and homework results', () => {
+  async function createStaff(username, role) {
+    const ownerSession = await loginOwner()
+    const created = await request('/api/auth/signup', {
+      method: 'POST',
+      token: ownerSession.access_token,
+      body: { username, password: 'temporary-password', role, name: username },
+    })
+    expect(created.status).toBe(201)
+    const login = await request('/api/auth/login', {
+      method: 'POST',
+      body: { username, password: 'temporary-password' },
+    })
+    expect(login.status).toBe(200)
+    const first = await login.json()
+    const reset = await request('/api/auth/update', {
+      method: 'POST',
+      token: first.session.access_token,
+      body: { password: `${username}-secure-password` },
+    })
+    expect(reset.status).toBe(200)
+    return (await reset.json()).session
+  }
+
+  it('lets reception correct and void payments with an audit trail, but not delete them', async () => {
+    const session = await createStaff('reception1', 'reception')
+    await env.DB.prepare('INSERT INTO students (id, name) VALUES (?, ?)').bind('pay-student', 'Pay Student').run()
+    await env.DB.prepare('INSERT INTO payments (id, student_id, student_name, amount, month, year, paid_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
+      .bind('pay-1', 'pay-student', 'Pay Student', 100, 3, 2026, '2026-03-05T10:00:00.000Z').run()
+
+    const corrected = await request('/api/payments/correct', {
+      method: 'POST',
+      token: session.access_token,
+      body: { id: 'pay-1', amount: 150, method: 'card', note: 'Karta orqali', reason: 'Summa xato yozilgan' },
+    })
+    expect(corrected.status).toBe(200)
+    const stored = await env.DB.prepare('SELECT amount, method, note FROM payments WHERE id = ?').bind('pay-1').first()
+    expect(stored).toEqual({ amount: 150, method: 'card', note: 'Karta orqali' })
+
+    const noReason = await request('/api/payments/void', {
+      method: 'POST',
+      token: session.access_token,
+      body: { id: 'pay-1' },
+    })
+    expect(noReason.status).toBe(400)
+    const voided = await request('/api/payments/void', {
+      method: 'POST',
+      token: session.access_token,
+      body: { id: 'pay-1', reason: 'Mijoz to‘lovni qaytardi' },
+    })
+    expect(voided.status).toBe(200)
+    const voidRow = await env.DB.prepare('SELECT voided_at, void_reason FROM payments WHERE id = ?').bind('pay-1').first()
+    expect(voidRow.voided_at).toBeTruthy()
+    expect(voidRow.void_reason).toContain('qaytardi')
+
+    const afterVoid = await request('/api/payments/correct', {
+      method: 'POST',
+      token: session.access_token,
+      body: { id: 'pay-1', amount: 200 },
+    })
+    expect(afterVoid.status).toBe(409)
+
+    const history = await request('/api/payments/history?payment_id=pay-1', { token: session.access_token })
+    expect(history.status).toBe(200)
+    const historyRows = (await history.json()).data
+    expect(historyRows.map((row) => row.action)).toEqual(['voided', 'corrected'])
+    expect(JSON.parse(historyRows[1].old_data).amount).toBe(100)
+    expect(JSON.parse(historyRows[1].new_data).amount).toBe(150)
+
+    const receptionDelete = await request('/api/db', {
+      method: 'POST',
+      token: session.access_token,
+      body: { table: 'payments', action: 'delete', filters: [{ op: 'eq', column: 'id', value: 'pay-1' }] },
+    })
+    expect(receptionDelete.status).toBe(403)
+
+    const ownerSession = await loginOwner()
+    const ownerDelete = await request('/api/db', {
+      method: 'POST',
+      token: ownerSession.access_token,
+      body: { table: 'payments', action: 'delete', filters: [{ op: 'eq', column: 'id', value: 'pay-1' }] },
+    })
+    expect(ownerDelete.status).toBe(200)
+  })
+
+  it('keeps the homework result teacher-only, requires media, and records every change', async () => {
+    const ownerSession = await loginOwner()
+    await env.DB.prepare('INSERT INTO teachers (id, name) VALUES (?, ?)').bind('teacher-review', 'Review Teacher').run()
+    await env.DB.prepare('INSERT INTO groups (id, name, teacher_id) VALUES (?, ?, ?)')
+      .bind('review-group', 'Review Group', 'teacher-review').run()
+    await env.DB.prepare('INSERT INTO students (id, name) VALUES (?, ?)').bind('review-student', 'Review Student').run()
+    await env.DB.prepare('INSERT INTO group_students (group_id, student_id) VALUES (?, ?)')
+      .bind('review-group', 'review-student').run()
+    await env.DB.prepare('INSERT INTO homework (id, group_id, teacher_id, title, deadline) VALUES (?, ?, ?, ?, ?)')
+      .bind('review-homework', 'review-group', 'teacher-review', 'Essay', '2026-01-01T00:00:00.000Z').run()
+    await env.DB.prepare('INSERT INTO homework_submissions (id, homework_id, student_id, content_text, status) VALUES (?, ?, ?, ?, ?)')
+      .bind('review-submission', 'review-homework', 'review-student', 'Matn', 'pending').run()
+
+    const incomplete = await request('/api/homework/review', {
+      method: 'POST',
+      token: ownerSession.access_token,
+      body: { submission_id: 'review-submission', status: 'approved' },
+    })
+    expect(incomplete.status).toBe(400)
+
+    await env.DB.prepare('UPDATE homework_submissions SET video_note_url = ? WHERE id = ?')
+      .bind('https://files.test/video.mp4', 'review-submission').run()
+    const approved = await request('/api/homework/review', {
+      method: 'POST',
+      token: ownerSession.access_token,
+      body: { submission_id: 'review-submission', status: 'approved', comment: 'Yaxshi' },
+    })
+    expect(approved.status).toBe(200)
+    const rejected = await request('/api/homework/review', {
+      method: 'POST',
+      token: ownerSession.access_token,
+      body: { submission_id: 'review-submission', status: 'rejected', comment: 'Qayta ishlang' },
+    })
+    expect(rejected.status).toBe(200)
+
+    const history = await request('/api/homework/history?submission_id=review-submission', {
+      token: ownerSession.access_token,
+    })
+    const historyRows = (await history.json()).data
+    expect(historyRows).toHaveLength(2)
+    expect(historyRows[0].old_status).toBe('approved')
+    expect(historyRows[0].new_status).toBe('rejected')
+    expect(historyRows[1].old_status).toBe('pending')
+    expect(historyRows[1].new_comment).toBe('Yaxshi')
+
+    const receptionSession = await createStaff('reception2', 'reception')
+    const receptionReview = await request('/api/homework/review', {
+      method: 'POST',
+      token: receptionSession.access_token,
+      body: { submission_id: 'review-submission', status: 'approved' },
+    })
+    expect(receptionReview.status).toBe(403)
   })
 })
 

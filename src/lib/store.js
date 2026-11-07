@@ -87,7 +87,7 @@ export function validateGroupSchedule(groups, group, excludeId = null, options =
 
 export function amountPaidForMonth(payments, studentId, month, year) {
   return payments
-    .filter((p) => p.studentId === studentId && Number(p.month) === Number(month) && Number(p.year) === Number(year))
+    .filter((p) => p.studentId === studentId && !p.voidedAt && Number(p.month) === Number(month) && Number(p.year) === Number(year))
     .reduce((sum, p) => sum + (Number(p.amount) || 0), 0)
 }
 

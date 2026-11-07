@@ -31,6 +31,8 @@ import {
 } from '../lib/data/index.js'
 import { parseParentPhones } from '../lib/phone.js'
 
+const SESSION_NOW = Date.now()
+
 const roleLabels = {
   student: 'O‘quvchi',
   teacher: 'O‘qituvchi',
@@ -121,7 +123,8 @@ function ActionButton({ children, className = '', ...props }) {
 function TaskCard({ task, teacher, onClick }) {
   const submissions = task.submissions || []
   const status = task.submission?.status
-  const statusText = status === 'approved' ? 'Qabul qilingan' : status === 'rejected' ? 'Qayta ishlash kerak' : status === 'pending' ? 'Tekshirilmoqda' : 'Yangi'
+  const overdue = !status && task.due_at && new Date(task.due_at).getTime() < SESSION_NOW
+  const statusText = status === 'approved' ? 'Bajardi' : status === 'rejected' ? 'Bajarmadi' : status === 'pending' ? 'Tekshirilmoqda' : overdue ? 'Topshirilmadi' : 'Yangi'
 
   return (
     <button type="button" className="task-card w-full rounded-3xl border p-4 text-left" onClick={onClick}>
@@ -375,7 +378,7 @@ export default function MainApp() {
       if (previewUrl.current) URL.revokeObjectURL(previewUrl.current)
       previewUrl.current = ''
       setSubmissionPreview('')
-      setSubmissionForm({ text: '', file: null })
+      setSubmissionForm({ text: '', file: null, videoNote: null })
       setNotice('Vazifa muvaffaqiyatli topshirildi.')
       await refresh(user)
     } catch (submitError) {
@@ -922,19 +925,21 @@ export default function MainApp() {
                 <h2 className="font-bold">Javobni topshirish</h2>
                 {selectedHomework.submission?.status && (
                   <p className="mt-2 text-sm text-[var(--mini-muted)]">
-                    Holati: {selectedHomework.submission.status === 'approved' ? 'Qabul qilingan' : selectedHomework.submission.status === 'rejected' ? 'Qaytarilgan' : 'Tekshirilmoqda'}
+                    Holati: {selectedHomework.submission.status === 'approved' ? 'Bajardi' : selectedHomework.submission.status === 'rejected' ? 'Bajarmadi' : 'Tekshirilmoqda'}
                   </p>
                 )}
                 {selectedHomework.submission?.feedback && <p className="mt-2 text-sm">Izoh: {selectedHomework.submission.feedback}</p>}
                 <form id="mini-submission-form" className="mt-4 grid gap-3" onSubmit={saveSubmission}>
                   <label className="mini-field"><span>Matnli javob</span><textarea rows="4" value={submissionForm.text} onChange={(event) => setSubmissionForm({ ...submissionForm, text: event.target.value })} /></label>
                   <label className="mini-field"><span>Rasm yoki PDF (10 MB gacha)</span><input type="file" accept="application/pdf,image/jpeg,image/png,image/webp" onChange={(event) => chooseSubmissionFile(event.target.files?.[0] || null)} /></label>
+                  <label className="mini-field"><span>Video yoki ovozli xabar (majburiy)</span><input type="file" accept="video/*,audio/*" onChange={(event) => setSubmissionForm({ ...submissionForm, videoNote: event.target.files?.[0] || null })} /></label>
+                  <p className="text-xs text-[var(--mini-muted)]">Topshiriq to‘liq hisoblanishi uchun matn yoki fayl va bitta video yoki ovozli xabar kerak.</p>
                   {submissionPreview && (
                     submissionForm.file?.type.startsWith('image/')
                       ? <img className="max-h-64 w-full rounded-2xl object-contain" src={submissionPreview} alt="Yuboriladigan rasm ko‘rinishi" />
                       : <a className="mini-link break-all" href={submissionPreview} target="_blank" rel="noreferrer">PDF ko‘rinishini ochish · {submissionForm.file?.name}</a>
                   )}
-                  <ActionButton type="submit" disabled={busy || (!submissionForm.text.trim() && !submissionForm.file)}>{busy ? 'Yuborilmoqda…' : 'Topshirish'}</ActionButton>
+                  <ActionButton type="submit" disabled={busy || (!submissionForm.text.trim() && !submissionForm.file) || (!submissionForm.videoNote && !selectedHomework.submission?.video_note_url && !selectedHomework.submission?.voice_url)}>{busy ? 'Yuborilmoqda…' : 'Topshirish'}</ActionButton>
                 </form>
               </Panel>
             )}
@@ -946,12 +951,14 @@ export default function MainApp() {
                 </div>
                 {submission.content_text && <p className="mt-3 whitespace-pre-wrap text-sm">{submission.content_text}</p>}
                 {submission.file_url && <a className="mini-link mt-3 inline-block" href={submission.file_url} target="_blank" rel="noreferrer">Yuborilgan faylni ochish</a>}
+                {submission.video_note_url && <a className="mini-link mt-3 inline-block" href={submission.video_note_url} target="_blank" rel="noreferrer">Video xabarni ochish</a>}
+                {submission.voice_url && <a className="mini-link mt-3 inline-block" href={submission.voice_url} target="_blank" rel="noreferrer">Ovozli xabarni ochish</a>}
                 <label className="mini-field mt-3"><span>O‘qituvchi izohi</span>
                   <textarea rows="2" value={feedbacks[submission.id] ?? submission.feedback ?? ''} onChange={(event) => setFeedbacks({ ...feedbacks, [submission.id]: event.target.value })} />
                 </label>
                 <div className="mt-3 flex gap-2">
-                  <ActionButton disabled={busy} onClick={() => saveReview(submission, 'approved')}><Check size={15} /> Qabul qilish</ActionButton>
-                  <ActionButton disabled={busy} className="mini-danger" onClick={() => saveReview(submission, 'rejected')}>Qaytarish</ActionButton>
+                  <ActionButton disabled={busy} onClick={() => saveReview(submission, 'approved')}><Check size={15} /> Bajardi</ActionButton>
+                  <ActionButton disabled={busy} className="mini-danger" onClick={() => saveReview(submission, 'rejected')}>Bajarmadi</ActionButton>
                 </div>
               </Panel>
             ))}

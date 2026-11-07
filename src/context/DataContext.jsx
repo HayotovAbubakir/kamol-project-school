@@ -133,6 +133,18 @@ export function DataProvider({ children }) {
       async addPayment(payment) {
         await run(() => api.addPayment(payment))
       },
+      async correctPayment(payment) {
+        await run(() => api.correctPayment(payment))
+      },
+      async voidPayment(payment) {
+        await run(() => api.voidPayment(payment))
+      },
+      async deletePayment(id) {
+        await run(() => api.deletePayment(id))
+      },
+      async loadPaymentHistory(paymentId) {
+        return api.paymentHistory(paymentId)
+      },
       async addSalaryPayment(payment) {
         await run(() => api.addSalaryPayment(payment))
       },

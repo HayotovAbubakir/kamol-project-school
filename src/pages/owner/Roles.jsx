@@ -13,6 +13,15 @@ const ROLES = [
     items: ['owner.roles.adminEducation', 'owner.roles.adminSchedule', 'owner.roles.adminFinance', 'owner.roles.adminAttendance'],
   },
   {
+    roleKey: 'role.reception',
+    items: [
+      'owner.roles.receptionStudents',
+      'owner.roles.receptionPayments',
+      'owner.roles.receptionAttendance',
+      'owner.roles.receptionNoFinance',
+    ],
+  },
+  {
     roleKey: 'role.teacher',
     items: ['owner.roles.teacherGroups', 'owner.roles.teacherAttendance', 'owner.roles.teacherSchedule'],
   },
