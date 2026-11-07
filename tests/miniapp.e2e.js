@@ -46,14 +46,17 @@ function profileFor(role) {
   }
 }
 
-async function installMocks(page, role, scheme = 'light', { signedIn = true } = {}) {
+async function installMocks(page, role, scheme = 'light', { signedIn = true, scheduleScenario = null } = {}) {
   const profile = profileFor(role)
+  const schedule = scheduleScenario
+    ? [{ slotId: 'schedule-slot', day: scheduleScenario.weekday, startTime: '09:00', endTime: '10:00', teacherId: 'teacher-1' }]
+    : [{ day: 0, startTime: '09:00', endTime: '10:00', teacherId: 'teacher-1' }]
   const group = {
     id: 'group-1',
     name: 'A1 boshlang‘ich',
     teacher_id: 'teacher-1',
     monthly_fee: 350000,
-    schedule: [{ day: 0, startTime: '09:00', endTime: '10:00', teacherId: 'teacher-1' }],
+    schedule,
   }
   const student = {
     id: 'student-1',
@@ -131,6 +134,71 @@ async function installMocks(page, role, scheme = 'light', { signedIn = true } = 
       })
     }
     if (pathname === '/api/auth/logout') return json({ ok: true })
+    if (pathname === '/api/schedule/state') {
+      return json({ data: { groups: [{
+        group_id: group.id,
+        versions: [],
+        overrides: scheduleScenario?.override ? [scheduleScenario.override] : [],
+      }] } })
+    }
+    if (pathname === '/api/schedule/history') {
+      return json({ data: {
+        events: scheduleScenario?.events || [],
+        deliveries: scheduleScenario?.deliveries || [],
+      } })
+    }
+    if (pathname === '/api/schedule/preview' && scheduleScenario) {
+      const body = request.postDataJSON()
+      return json({ data: {
+        notificationCount: 2,
+        oldLesson: { date: body.originalDate, startTime: '09:00', endTime: '10:00' },
+        newLesson: { date: body.newDate, newDate: body.newDate, startTime: body.startTime, endTime: body.endTime, status: 'changed' },
+      } })
+    }
+    if (pathname === '/api/schedule/changes' && scheduleScenario) {
+      const body = request.postDataJSON()
+      const changeId = 'schedule-change-1'
+      scheduleScenario.override = {
+        group_id: group.id,
+        slot_id: body.slotId,
+        original_date: body.originalDate,
+        action: 'change',
+        original_start_time: '09:00',
+        original_end_time: '10:00',
+        new_start_time: body.startTime,
+        new_end_time: body.endTime,
+        new_date: body.newDate,
+        reason: body.reason,
+        change_id: changeId,
+      }
+      scheduleScenario.events = [{
+        id: 'schedule-event-1',
+        change_id: changeId,
+        event_type: 'created',
+        actor_name: profile.name,
+        created_at: new Date().toISOString(),
+        details: JSON.stringify({ reason: body.reason }),
+      }]
+      scheduleScenario.deliveries = ['teacher', 'student'].map((recipient, index) => ({
+        id: `schedule-notice-${index}`,
+        change_id: changeId,
+        recipient_name: recipient === 'teacher' ? 'Dilshod Karimov' : 'Ali Valiyev',
+        channel: 'in_app',
+        notification_kind: 'change',
+        status: 'sent',
+      }))
+      scheduleScenario.notifications = ['teacher', 'student'].map((recipient, index) => ({
+        id: `schedule-notice-${index}`,
+        group_name: group.name,
+        message: `Dars jadvali o‘zgardi. Yangi vaqt: ${body.startTime}–${body.endTime}`,
+        scheduled_at: new Date().toISOString(),
+        recipient,
+      }))
+      return json({ data: { id: changeId, duplicate: false } }, 201)
+    }
+    if (pathname === '/api/notifications') {
+      return json({ data: (scheduleScenario?.notifications || []).filter((item) => item.recipient === role) })
+    }
     if (pathname === `/api/students/${student.id}/telegram/unlink`) {
       records.profiles[0].telegram_id = null
       return json({ data: { ok: true } })
@@ -167,7 +235,16 @@ async function installMocks(page, role, scheme = 'light', { signedIn = true } = 
       return json({ data: { ...createdStudent, username: createdStudent.login, group_ids: body.group_ids } })
     }
     if (pathname === '/api/miniapp/student/overview') {
-      return json({ data: { homeworks: records.homework, payments: records.payments, attendance: records.attendance, groups: [group] } })
+      return json({ data: {
+        homeworks: records.homework,
+        payments: records.payments,
+        attendance: records.attendance,
+        groups: [{
+          ...group,
+          scheduleVersions: [],
+          scheduleOverrides: scheduleScenario?.override ? [scheduleScenario.override] : [],
+        }],
+      } })
     }
     if (pathname === '/api/homework/review') return json({ data: { submissions: [], not_submitted: [] } })
     if (pathname.startsWith('/api/homework/history')) return json({ data: { events: [], submissions: [] } })
@@ -364,5 +441,52 @@ test.describe('Mini App role flows', () => {
     await page.getByRole('dialog', { name: 'Telegram akkauntini uzish' }).getByRole('button', { name: 'Tasdiqlash' }).click()
     await expect(page.getByText('Telegram akkaunti uzildi.')).toBeVisible()
     await expect(page.getByRole('button', { name: 'Telegramdan uzish' })).toHaveCount(0)
+  })
+
+  test('reception reschedules tomorrow and teacher/student see the changed lesson and notification', async ({ page, browser }) => {
+    const today = new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'Asia/Tashkent', year: 'numeric', month: '2-digit', day: '2-digit',
+    }).format(new Date())
+    const tomorrowDate = new Date(`${today}T12:00:00Z`)
+    tomorrowDate.setUTCDate(tomorrowDate.getUTCDate() + 1)
+    const tomorrow = tomorrowDate.toISOString().slice(0, 10)
+    const weekday = new Date(`${tomorrow}T12:00:00Z`).getUTCDay() || 7
+    const scheduleScenario = { weekday, override: null, events: [], deliveries: [], notifications: [] }
+
+    await page.setViewportSize({ width: 390, height: 844 })
+    await installMocks(page, 'reception', 'light', { scheduleScenario })
+    await page.goto('/miniapp.html')
+    await page.getByRole('navigation', { name: 'Asosiy menyu' }).getByRole('button', { name: 'Guruhlar', exact: true }).click()
+    await page.getByRole('button', { name: 'O‘zgartirish' }).click()
+    const sheet = page.getByRole('dialog', { name: /Dars jadvali/ })
+    await sheet.locator('select').first().selectOption('schedule-slot')
+    await sheet.getByLabel('Yangi sana').fill(new Date(new Date(`${tomorrow}T12:00:00Z`).getTime() + 86_400_000).toISOString().slice(0, 10))
+    await sheet.getByLabel('Boshlanish vaqti').fill('11:00')
+    await sheet.getByLabel('Tugash vaqti').fill('12:00')
+    await sheet.getByLabel('Sabab').fill('Xona band bo‘lgani uchun')
+    await sheet.getByRole('button', { name: 'Tekshirish' }).click()
+    await expect(sheet.getByText('Xabarnoma oluvchilar:')).toBeVisible()
+    await sheet.getByRole('button', { name: 'Saqlash' }).click()
+    await expect(sheet).toBeHidden()
+
+    const teacherPage = await browser.newPage({ viewport: { width: 390, height: 844 } })
+    await installMocks(teacherPage, 'teacher', 'light', { scheduleScenario })
+    await teacherPage.goto('/miniapp.html')
+    await teacherPage.getByRole('navigation', { name: 'Asosiy menyu' }).getByRole('button', { name: 'Guruhlar', exact: true }).click()
+    await expect(teacherPage.getByText(/O‘zgartirilgan/)).toBeVisible()
+    await expect(teacherPage.getByText(/11:00–12:00/)).toBeVisible()
+    await teacherPage.getByRole('button', { name: /Bildirishnomalar/ }).click()
+    await expect(teacherPage.getByText(/Yangi vaqt: 11:00–12:00/)).toBeVisible()
+
+    const studentPage = await browser.newPage({ viewport: { width: 390, height: 844 } })
+    await installMocks(studentPage, 'student', 'light', { scheduleScenario })
+    await studentPage.goto('/miniapp.html')
+    await studentPage.getByRole('navigation', { name: 'Asosiy menyu' }).getByRole('button', { name: 'Jadval', exact: true }).click()
+    await expect(studentPage.getByText(/O‘zgartirilgan/)).toBeVisible()
+    await studentPage.getByRole('button', { name: /Bildirishnomalar/ }).click()
+    await expect(studentPage.getByText(/Yangi vaqt: 11:00–12:00/)).toBeVisible()
+    await assertNoHorizontalOverflow(studentPage)
+    await teacherPage.close()
+    await studentPage.close()
   })
 })

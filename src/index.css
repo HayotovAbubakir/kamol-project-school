@@ -2224,6 +2224,12 @@ html.light .chart-tooltip {
   max-width: 200px;
 }
 
+.group-finance-month-selects {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
 .group-finance-stats {
   padding: 0 16px 14px;
 }
@@ -5612,4 +5618,163 @@ html[data-wallpaper="video"] *::before,
 html[data-wallpaper="video"] *::after {
   backdrop-filter: none !important;
   -webkit-backdrop-filter: none !important;
+}
+
+.schedule-change-dialog {
+  display: grid;
+  gap: 18px;
+  max-height: min(72vh, 760px);
+  overflow: auto;
+  padding: 2px 2px 8px;
+}
+
+.schedule-change-tabs {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.schedule-change-tabs button {
+  min-height: 44px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--glass-bg);
+  color: var(--text);
+  font-weight: 700;
+}
+
+.schedule-change-tabs button.is-active {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+
+.schedule-change-form {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: end;
+  gap: 12px;
+}
+
+.schedule-change-form > label {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  color: var(--muted);
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
+.schedule-change-form .schedule-change-reason {
+  grid-column: 1 / -1;
+}
+
+.schedule-change-preview,
+.schedule-change-history {
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--glass-bg);
+}
+
+.schedule-change-preview h3,
+.schedule-change-history h3 {
+  margin: 0;
+  color: var(--text);
+  font-size: 0.95rem;
+}
+
+.schedule-change-preview p,
+.schedule-change-history p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.schedule-change-error,
+.schedule-change-notice {
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: 10px;
+  font-size: 0.85rem;
+}
+
+.schedule-change-error {
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 10%, transparent);
+}
+
+.schedule-change-notice {
+  color: var(--success);
+  background: color-mix(in srgb, var(--success) 10%, transparent);
+}
+
+.schedule-change-history-item {
+  display: grid;
+  gap: 8px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+
+.schedule-change-history-item > div:first-child {
+  display: grid;
+  gap: 3px;
+}
+
+.schedule-change-history-item > div:first-child span,
+.schedule-change-delivery > span {
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.schedule-change-delivery {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.schedule-change-badge,
+.schedule-cancel-badge {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 8px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  font-size: 0.68rem;
+  font-weight: 750;
+  vertical-align: middle;
+}
+
+.schedule-change-badge {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+.schedule-cancel-badge {
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
+}
+
+.schedule-change-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+  width: 100%;
+}
+
+@media (max-width: 560px) {
+  .schedule-change-form {
+    grid-template-columns: 1fr;
+  }
+
+  .schedule-change-tabs {
+    grid-template-columns: 1fr;
+  }
+
+  .schedule-change-actions > .btn {
+    flex: 1 1 100%;
+  }
 }

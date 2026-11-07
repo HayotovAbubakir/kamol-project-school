@@ -4,6 +4,7 @@ import worker, { buildHomeworkNotificationText, canAccessTable, expireHomeworkDr
 import { calculateFinanceSummary, validateGroupSchedule } from '../worker/domain.js'
 import { hashInviteCode } from '../worker/telegram-auth.js'
 import { isValidLogin, loginBaseFromName } from '../shared/account-credentials.js'
+import { findDateScheduleConflict, getEffectiveLesson } from '../shared/schedule.js'
 import {
   ROLE_PERMISSIONS,
   ROLES,
@@ -110,6 +111,11 @@ beforeAll(async () => {
     'CREATE TABLE payments (id TEXT PRIMARY KEY, student_id TEXT, student_name TEXT NOT NULL DEFAULT \'\', amount REAL NOT NULL, month INTEGER NOT NULL, year INTEGER NOT NULL, paid_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, method TEXT NOT NULL DEFAULT \'cash\', note TEXT NOT NULL DEFAULT \'\', voided_at TEXT, voided_by TEXT, void_reason TEXT NOT NULL DEFAULT \'\', updated_at TEXT, updated_by TEXT, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)',
     'CREATE TABLE payment_audit (id TEXT PRIMARY KEY, payment_id TEXT NOT NULL, action TEXT NOT NULL, actor_id TEXT, actor_name TEXT NOT NULL DEFAULT \'\', reason TEXT NOT NULL DEFAULT \'\', old_data TEXT NOT NULL DEFAULT \'{}\', new_data TEXT NOT NULL DEFAULT \'{}\', created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)',
     'CREATE TABLE salary_payments (id TEXT PRIMARY KEY, teacher_id TEXT NOT NULL, amount REAL NOT NULL, paid_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)',
+    'CREATE TABLE schedule_versions (id TEXT PRIMARY KEY, group_id TEXT NOT NULL, valid_from TEXT NOT NULL, valid_to TEXT, schedule TEXT NOT NULL, change_id TEXT, created_by TEXT, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)',
+    "CREATE TABLE schedule_changes (id TEXT PRIMARY KEY, group_id TEXT NOT NULL, request_id TEXT NOT NULL UNIQUE, change_type TEXT NOT NULL, actor_id TEXT NOT NULL, reason TEXT NOT NULL DEFAULT '', old_data TEXT NOT NULL, new_data TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'active', created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, reverted_at TEXT)",
+    "CREATE TABLE schedule_overrides (id TEXT PRIMARY KEY, group_id TEXT NOT NULL, slot_id TEXT NOT NULL, original_date TEXT NOT NULL, action TEXT NOT NULL, original_start_time TEXT NOT NULL, original_end_time TEXT NOT NULL, new_start_time TEXT, new_end_time TEXT, new_date TEXT, new_teacher_id TEXT, reason TEXT NOT NULL DEFAULT '', change_id TEXT NOT NULL, changed_by TEXT NOT NULL, changed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, reverted_at TEXT)",
+    "CREATE TABLE schedule_change_events (id TEXT PRIMARY KEY, change_id TEXT NOT NULL, group_id TEXT NOT NULL, request_id TEXT, event_type TEXT NOT NULL, actor_id TEXT NOT NULL, details TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)",
+    "CREATE TABLE schedule_notification_outbox (id TEXT PRIMARY KEY, change_id TEXT NOT NULL, recipient_id TEXT NOT NULL, recipient_name TEXT NOT NULL DEFAULT '', channel TEXT NOT NULL, notification_kind TEXT NOT NULL, telegram_id INTEGER, message TEXT NOT NULL, status TEXT NOT NULL, scheduled_at TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, next_attempt_at TEXT NOT NULL, last_error TEXT, sent_at TEXT, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, UNIQUE(change_id, recipient_id, channel, notification_kind))",
     "CREATE TABLE expenses (id TEXT PRIMARY KEY, title TEXT NOT NULL, amount REAL NOT NULL, category TEXT NOT NULL DEFAULT 'Operatsion', date TEXT NOT NULL DEFAULT (date('now')), recorded_by TEXT, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)",
     "CREATE INDEX payment_audit_payment_idx ON payment_audit(payment_id)",
     `CREATE VIEW monthly_homework_report AS
@@ -136,6 +142,17 @@ beforeAll(async () => {
       GROUP BY st.id, st.name, substr(COALESCE(h.due_at, h.created_at), 1, 7)`,
   ]
   for (const statement of schema) await db.prepare(statement).run()
+  await db.prepare(`CREATE TRIGGER groups_schedule_requires_version
+    BEFORE UPDATE OF schedule ON groups
+    WHEN NEW.schedule IS NOT OLD.schedule
+    BEGIN SELECT RAISE(ABORT, 'Use schedule version endpoints to change a group schedule'); END`).run()
+  await db.prepare(`CREATE TRIGGER groups_schedule_seed_version
+    AFTER INSERT ON groups
+    WHEN NOT EXISTS (SELECT 1 FROM schedule_versions WHERE group_id = NEW.id)
+    BEGIN
+      INSERT INTO schedule_versions (id, group_id, valid_from, schedule, created_at)
+      VALUES ('initial-' || NEW.id, NEW.id, '0001-01-01', NEW.schedule, CURRENT_TIMESTAMP);
+    END`).run()
   env = {
     DB: db,
     FILES: await miniflare.getR2Bucket('FILES'),
@@ -305,6 +322,255 @@ describe('server permission rules', () => {
   })
 })
 
+describe('effective schedule dates', () => {
+  const group = {
+    id: 'group-1',
+    name: 'Boshlang‘ich',
+    teacher_id: 'teacher-1',
+    schedule: [{ slotId: 'slot-1', day: 1, startTime: '09:00', endTime: '10:00', teacherId: 'teacher-1' }],
+  }
+  const date = '2026-11-09'
+
+  it('uses the base schedule when no version or override applies', () => {
+    expect(getEffectiveLesson(group.id, date, { group })).toMatchObject([
+      { slotId: 'slot-1', date, startTime: '09:00', endTime: '10:00', status: 'regular' },
+    ])
+  })
+
+  it('applies a single-date time change and cancellation', () => {
+    const overrides = [
+      {
+        group_id: group.id, slot_id: 'slot-1', original_date: date, action: 'change',
+        original_start_time: '09:00', original_end_time: '10:00',
+        new_start_time: '10:00', new_end_time: '11:00',
+      },
+    ]
+    expect(getEffectiveLesson(group.id, date, { group, overrides })[0])
+      .toMatchObject({ startTime: '10:00', endTime: '11:00', status: 'changed' })
+    expect(getEffectiveLesson(group.id, date, {
+      group,
+      overrides: [{ ...overrides[0], action: 'cancel' }],
+    })[0]).toMatchObject({ status: 'cancelled' })
+  })
+
+  it('moves a lesson to another date and keeps its original-date marker', () => {
+    const overrides = [{
+      group_id: group.id, slot_id: 'slot-1', original_date: date, new_date: '2026-11-10',
+      action: 'change', new_start_time: '11:00', new_end_time: '12:00',
+    }]
+    expect(getEffectiveLesson(group.id, date, { group, overrides })[0]).toMatchObject({
+      status: 'rescheduled', newDate: '2026-11-10',
+    })
+    expect(getEffectiveLesson(group.id, '2026-11-10', { group, overrides })[0]).toMatchObject({
+      status: 'changed', originalDate: date, startTime: '11:00', endTime: '12:00',
+    })
+  })
+
+  it('selects the effective-dated weekly version and ignores reverted overrides', () => {
+    const versions = [{
+      id: 'version-2', group_id: group.id, valid_from: '2026-11-16',
+      schedule: JSON.stringify([{ slotId: 'slot-1', day: 1, startTime: '12:00', endTime: '13:00' }]),
+    }]
+    expect(getEffectiveLesson(group.id, '2026-11-16', { group, versions })[0])
+      .toMatchObject({ startTime: '12:00', status: 'regular' })
+    expect(getEffectiveLesson(group.id, date, {
+      group,
+      overrides: [{
+        group_id: group.id, slot_id: 'slot-1', original_date: date, action: 'cancel',
+        reverted_at: '2026-11-08T12:00:00Z',
+      }],
+    })[0]).toMatchObject({ status: 'regular' })
+  })
+
+  it('detects teacher and same-group date conflicts', () => {
+    const otherGroup = {
+      id: 'group-2',
+      name: 'O‘rta',
+      teacher_id: 'teacher-1',
+      schedule: [{ slotId: 'slot-2', day: 1, startTime: '09:00', endTime: '10:00' }],
+    }
+    expect(findDateScheduleConflict({
+      date,
+      lesson: { groupId: group.id, teacherId: 'teacher-1', startTime: '09:30', endTime: '10:30' },
+      groups: [group, otherGroup],
+      excludeSlotId: 'slot-1',
+    })).toMatch(/O‘qituvchi/)
+    expect(findDateScheduleConflict({
+      date,
+      lesson: { groupId: group.id, teacherId: 'teacher-1', startTime: '09:30', endTime: '10:30' },
+      groups: [group],
+      excludeSlotId: 'slot-other',
+    })).toMatch(/Guruhning/)
+  })
+})
+
+describe('schedule change API', () => {
+  it('previews, authorizes, persists, deduplicates, and reverses a change with fan-out', async () => {
+    const owner = await loginOwner()
+    const dateNow = new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'Asia/Tashkent', year: 'numeric', month: '2-digit', day: '2-digit',
+    }).format(new Date())
+    const date = new Date(`${dateNow}T12:00:00Z`)
+    date.setUTCDate(date.getUTCDate() + 1)
+    const lessonDate = date.toISOString().slice(0, 10)
+    const weekday = date.getUTCDay() || 7
+    const staffResponse = await request('/api/staff', {
+      method: 'POST',
+      token: owner.access_token,
+      body: {
+        name: 'Schedule Teacher',
+        username: 'schedule-teacher',
+        role: 'teacher',
+        password: 'schedule-test-password',
+        auto_username: false,
+      },
+    })
+    expect(staffResponse.status).toBe(201)
+    const teacher = (await staffResponse.json()).data
+    await env.DB.prepare('UPDATE profiles SET telegram_id = ? WHERE id = ?').bind(1234567, teacher.id).run()
+
+    await env.DB.prepare(`INSERT INTO students (id, name, login, telegram_id)
+      VALUES ('schedule-student', 'Schedule Student', 'schedule-student', 1234568)`).run()
+    await env.DB.prepare(`INSERT INTO accounts (id, password_reset_required, is_active)
+      VALUES ('schedule-student-profile', 0, 1)`).run()
+    await env.DB.prepare(`INSERT INTO profiles (id, username, name, role, student_id, telegram_id)
+      VALUES ('schedule-student-profile', 'schedule-student-profile', 'Schedule Student', 'student', 'schedule-student', 1234568)`).run()
+    await env.DB.prepare(`INSERT INTO groups (id, name, teacher_id, schedule)
+      VALUES ('schedule-group', 'Schedule Group', ?, ?)`)
+      .bind(teacher.teacher_id, JSON.stringify([{
+        slotId: 'schedule-slot', day: weekday, startTime: '09:00', endTime: '10:00', teacherId: teacher.teacher_id,
+      }])).run()
+    await env.DB.prepare('INSERT INTO group_students (group_id, student_id) VALUES (?, ?)')
+      .bind('schedule-group', 'schedule-student').run()
+    await env.DB.prepare(`INSERT INTO groups (id, name, teacher_id, schedule)
+      VALUES ('schedule-busy-group', 'Schedule Busy Group', ?, ?)`)
+      .bind(teacher.teacher_id, JSON.stringify([{
+        slotId: 'busy-slot', day: weekday, startTime: '11:30', endTime: '12:30', teacherId: teacher.teacher_id,
+      }])).run()
+
+    const login = await request('/api/auth/login', {
+      method: 'POST',
+      body: { username: 'schedule-teacher', password: 'schedule-test-password' },
+    })
+    expect(login.status).toBe(200)
+    const teacherSession = (await login.json()).session
+    const requestId = 'schedule-change-test-001'
+    const payload = {
+      requestId,
+      groupId: 'schedule-group',
+      type: 'single',
+      reason: 'Xona band bo‘lgani uchun',
+      slotId: 'schedule-slot',
+      originalDate: lessonDate,
+      action: 'change',
+      newDate: lessonDate,
+      startTime: '10:00',
+      endTime: '11:00',
+    }
+
+    expect((await request('/api/schedule/preview', { method: 'POST', token: owner.access_token, body: payload })).status).toBe(200)
+    expect((await request('/api/schedule/preview', { method: 'POST', token: teacherSession.access_token, body: payload })).status).toBe(200)
+    expect((await request('/api/schedule/preview', { method: 'POST', body: payload })).status).toBe(401)
+    expect((await request('/api/schedule/preview', {
+      method: 'POST',
+      token: owner.access_token,
+      body: { ...payload, requestId: 'schedule-conflict-test-001', startTime: '11:00', endTime: '12:00' },
+    })).status).toBe(409)
+    expect((await request('/api/schedule/preview', {
+      method: 'POST',
+      token: owner.access_token,
+      body: {
+        requestId: 'schedule-weekly-conflict-test-001',
+        groupId: 'schedule-group',
+        type: 'replace',
+        validFrom: lessonDate,
+        reason: 'Yangi jadvalni tekshirish',
+        schedule: [
+          { slotId: 'slot-a', day: weekday, startTime: '09:00', endTime: '10:00', teacherId: teacher.teacher_id },
+          { slotId: 'slot-b', day: weekday, startTime: '09:30', endTime: '10:30', teacherId: teacher.teacher_id },
+        ],
+      },
+    })).status).toBe(409)
+    const foreign = {
+      ...payload,
+      groupId: 'foreign-schedule-group',
+      requestId: 'schedule-change-test-foreign',
+    }
+    await env.DB.prepare(`INSERT INTO groups (id, name, teacher_id, schedule)
+      VALUES ('foreign-schedule-group', 'Foreign Schedule Group', 'other-teacher', '[]')`).run()
+    expect((await request('/api/schedule/preview', {
+      method: 'POST', token: teacherSession.access_token, body: foreign,
+    })).status).toBe(403)
+
+    const create = await request('/api/schedule/changes', { method: 'POST', token: owner.access_token, body: payload })
+    expect(create.status).toBe(201)
+    const created = (await create.json()).data
+    const duplicate = await request('/api/schedule/changes', { method: 'POST', token: owner.access_token, body: payload })
+    expect((await duplicate.json()).data).toEqual({ id: created.id, duplicate: true })
+    expect(await env.DB.prepare('SELECT COUNT(*) AS count FROM schedule_changes WHERE request_id = ?')
+      .bind(requestId).first()).toMatchObject({ count: 1 })
+    expect(await env.DB.prepare('SELECT COUNT(*) AS count FROM schedule_notification_outbox WHERE change_id = ?')
+      .bind(created.id).first()).toMatchObject({ count: 8 })
+    expect(await env.DB.prepare('SELECT new_start_time FROM schedule_overrides WHERE change_id = ?')
+      .bind(created.id).first()).toMatchObject({ new_start_time: '10:00' })
+
+    const undo = await request(`/api/schedule/changes/${created.id}/undo`, {
+      method: 'POST', token: owner.access_token, body: {},
+    })
+    expect(undo.status).toBe(200)
+    expect((await env.DB.prepare('SELECT reverted_at FROM schedule_overrides WHERE change_id = ?')
+      .bind(created.id).first()).reverted_at).toBeTruthy()
+    expect(await env.DB.prepare(`SELECT COUNT(*) AS count FROM schedule_notification_outbox
+      WHERE change_id = ? AND notification_kind = 'undo'`).bind(created.id).first()).toMatchObject({ count: 4 })
+
+    const receptionCreate = await request('/api/staff', {
+      method: 'POST',
+      token: owner.access_token,
+      body: {
+        name: 'Schedule Reception',
+        username: 'schedule-reception',
+        role: 'reception',
+        password: 'schedule-reception-password',
+        auto_username: false,
+      },
+    })
+    expect(receptionCreate.status).toBe(201)
+    const receptionLogin = await request('/api/auth/login', {
+      method: 'POST',
+      body: { username: 'schedule-reception', password: 'schedule-reception-password' },
+    })
+    const receptionSession = (await receptionLogin.json()).session
+    const cancelPayload = {
+      ...payload,
+      requestId: 'schedule-cancel-test-001',
+      action: 'cancel',
+    }
+    expect((await request('/api/schedule/preview', {
+      method: 'POST', token: receptionSession.access_token, body: cancelPayload,
+    })).status).toBe(200)
+    const receptionChange = await request('/api/schedule/changes', {
+      method: 'POST', token: receptionSession.access_token, body: cancelPayload,
+    })
+    expect(receptionChange.status).toBe(201)
+    const receptionChangeId = (await receptionChange.json()).data.id
+    expect(await env.DB.prepare(`SELECT COUNT(*) AS count FROM schedule_notification_outbox
+      WHERE change_id = ? AND notification_kind = 'reminder'`).bind(receptionChangeId).first())
+      .toMatchObject({ count: 0 })
+  })
+
+  it('rejects direct weekly schedule or teacher updates that bypass schedule history', async () => {
+    const owner = await loginOwner()
+    for (const values of [{ schedule: [] }, { teacher_id: 'other-teacher' }]) {
+      const response = await request('/api/db', {
+        method: 'POST',
+        token: owner.access_token,
+        body: { table: 'groups', action: 'update', filters: [{ op: 'eq', column: 'id', value: 'schedule-group' }], values },
+      })
+      expect(response.status).toBe(405)
+    }
+  })
+})
+
 describe('D1 worker routes and authentication', () => {
   it('enforces representative endpoint groups for every role and unauthenticated callers', async () => {
     const ownerSession = await loginOwner()
@@ -405,6 +671,23 @@ describe('D1 worker routes and authentication', () => {
 
       const questions = await request('/api/questions', { token })
       expect(questions.status, `${role}: questions`).toBe(role === 'unauthenticated' ? 401 : 200)
+
+      const scheduleManagement = await request('/api/schedule/preview', {
+        method: 'POST',
+        token,
+        body: {
+          requestId: 'schedule-role-matrix-001',
+          groupId: 'missing-schedule-group',
+          type: 'single',
+          reason: 'Ruxsat tekshiruvi',
+          slotId: 'slot-1',
+          originalDate: '2026-11-08',
+          action: 'cancel',
+        },
+      })
+      expect(scheduleManagement.status, `${role}: schedule management`).toBe(
+        ['owner', 'reception', 'teacher'].includes(role) ? 404 : role === 'unauthenticated' ? 401 : 403,
+      )
     }
   })
 
@@ -613,10 +896,9 @@ describe('D1 worker routes and authentication', () => {
     })
     expect(paymentWrite.status).toBe(403)
 
-    await env.DB.prepare('INSERT INTO groups (id, name, teacher_id) VALUES (?, ?, ?)')
-      .bind('telegram-group', 'Student Group', 'teacher-one').run()
-    await env.DB.prepare('UPDATE groups SET schedule = ? WHERE id = ?')
-      .bind(JSON.stringify([{ day: 0, startTime: '09:00', endTime: '10:00', teacherId: 'teacher-one' }]), 'telegram-group').run()
+    await env.DB.prepare('INSERT INTO groups (id, name, teacher_id, schedule) VALUES (?, ?, ?, ?)')
+      .bind('telegram-group', 'Student Group', 'teacher-one',
+        JSON.stringify([{ day: 0, startTime: '09:00', endTime: '10:00', teacherId: 'teacher-one' }])).run()
     await env.DB.prepare('INSERT INTO group_students (group_id, student_id) VALUES (?, ?)')
       .bind('telegram-group', 'telegram-student').run()
     const studentSchedule = await request('/api/miniapp/student/overview', { token: miniAppSession.session.access_token })

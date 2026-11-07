@@ -19,16 +19,16 @@ const WEEKDAY_KEYS = {
 export default function OwnerSchedule() {
   const { data } = useData()
   const { t } = useLanguage()
-  const lessons = useMemo(() => getTodayLessons(data), [data])
+  const lessons = useMemo(() => getTodayLessons(data, { includeChanged: true }), [data])
   const [copied, setCopied] = useState(false)
-  const isSunday = new Date().getDay() === 0
+  const isSunday = getTodayDayValue() === 7
   const dayValue = getTodayDayValue()
   const dayLabel = isSunday ? t('owner.schedule.sunday') : t(WEEKDAY_KEYS[dayValue])
 
   const copySchedule = async () => {
     if (!lessons.length) return
     const text = lessons
-      .map((l) => `${formatLessonTime(l)}\t${l.group}\t${l.teacher}`)
+      .map((l) => `${formatLessonTime(l)}\t${l.group}${l.status === 'cancelled' ? ' (bekor qilingan)' : l.status === 'changed' ? ' (o‘zgartirilgan)' : l.status === 'rescheduled' ? ` (ko‘chirilgan: ${l.newDate})` : ''}\t${l.teacher}`)
       .join('\n')
     try {
       await navigator.clipboard.writeText(text)
@@ -54,7 +54,7 @@ export default function OwnerSchedule() {
           <h2 className="home-panel-title">{t('owner.schedule.heading')}</h2>
           <span className="schedule-day-meta">{dayLabel}</span>
         </div>
-        {isSunday ? (
+        {isSunday && !lessons.length ? (
           <EmptyState title={t('owner.schedule.dayOff')} />
         ) : lessons.length === 0 ? (
           <EmptyState title={t('owner.schedule.noLessons')} />
@@ -69,7 +69,12 @@ export default function OwnerSchedule() {
               {lessons.map((lesson) => (
                 <div key={lesson.id} className="home-lesson-row">
                   <span className="home-lesson-time">{formatLessonTime(lesson)}</span>
-                  <span className="home-lesson-group">{lesson.group}</span>
+                  <span className="home-lesson-group">
+                    {lesson.group}
+                    {lesson.status === 'changed' && <span className="schedule-change-badge">O‘zgartirilgan</span>}
+                    {lesson.status === 'cancelled' && <span className="schedule-cancel-badge">Bekor qilingan</span>}
+                    {lesson.status === 'rescheduled' && <span className="schedule-change-badge">Ko‘chirilgan · {lesson.newDate}</span>}
+                  </span>
                   <span className="home-lesson-teacher">{lesson.teacher}</span>
                 </div>
               ))}

@@ -4,10 +4,29 @@ import { primaryGroupTeacherId, studentMonthlyFee, validateGroupSchedule } from 
 import { translate } from '../i18n/runtime'
 import { normalizePhone, packParentPhones, parseParentPhones } from './phone'
 import { loginBaseFromName } from '../../shared/account-credentials.js'
+import { normalizeScheduleWeekdays } from '../../shared/schedule.js'
 
 function requireClient() {
   if (!cloudflare) throw new Error('Cloudflare Worker API is unavailable.')
   return cloudflare
+}
+
+async function workerApiRequest(path, body = undefined) {
+  const db = requireClient()
+  const { data: sessionData } = await db.auth.getSession()
+  const token = sessionData.session?.access_token
+  if (!token) throw new Error('Sessiya tugagan. Ilovani qayta ochib kiring.')
+  const response = await fetch(path, {
+    method: body === undefined ? 'GET' : 'POST',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      ...(body === undefined ? {} : { 'Content-Type': 'application/json' }),
+    },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  })
+  const result = await response.json()
+  if (!response.ok) throw new Error(result.error || 'So‘rovni bajarib bo‘lmadi.')
+  return result.data
 }
 
 function throwDbError(error, fallbackKey = 'domain.error.dataLoadFailed') {
@@ -26,7 +45,8 @@ function asUuidOrNull(value) {
 
 function normalizeSchedulePayload(schedule = [], fallbackTeacherId = null) {
   const fallback = asUuidOrNull(fallbackTeacherId)
-  return (Array.isArray(schedule) ? schedule : []).map((slot) => ({
+  return normalizeScheduleWeekdays(schedule).map((slot) => ({
+    slotId: slot.slotId || slot.slot_id,
     day: Number(slot.day),
     startTime: String(slot.startTime || ''),
     endTime: String(slot.endTime || ''),
@@ -72,6 +92,15 @@ function mapGroup(row, studentIds = []) {
     schedule,
     studentIds,
   }
+}
+
+function tashkentTodayValue() {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Tashkent',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(new Date())
 }
 
 function mapStudent(row, groupIds = []) {
@@ -196,7 +225,24 @@ export async function loadAll(role = 'owner') {
     groupIdsByStudent[link.student_id].push(link.group_id)
   }
 
-  const groups = (groupsRes.data || []).map((g) => mapGroup(g, studentIdsByGroup[g.id] || []))
+  const scheduleState = await workerApiRequest('/api/schedule/state')
+  const scheduleByGroup = new Map((scheduleState.groups || []).map((state) => [state.group_id, state]))
+  const today = tashkentTodayValue()
+  const groups = (groupsRes.data || []).map((g) => {
+    const state = scheduleByGroup.get(g.id)
+    const activeVersion = (state?.versions || [])
+      .filter((version) => version.valid_from <= today && (!version.valid_to || today < version.valid_to))
+      .sort((left, right) => left.valid_from.localeCompare(right.valid_from))
+      .at(-1)
+    const schedule = activeVersion?.schedule
+      ? (Array.isArray(activeVersion.schedule) ? activeVersion.schedule : JSON.parse(activeVersion.schedule))
+      : g.schedule
+    return {
+      ...mapGroup({ ...g, schedule }, studentIdsByGroup[g.id] || []),
+      scheduleVersions: state?.versions || [],
+      scheduleOverrides: state?.overrides || [],
+    }
+  })
   const students = (studentsRes.data || []).map((s) => {
     const student = mapStudent(s, groupIdsByStudent[s.id] || [])
     student.monthlyFee = studentMonthlyFee(student, groups)
@@ -426,11 +472,29 @@ export async function updateGroup(id, updates, currentGroups = []) {
   const conflict = validateGroupSchedule(currentGroups, merged, id)
   if (conflict) throw new Error(conflict)
 
+  const scheduleChanged = (updates.schedule != null || updates.teacherId !== undefined)
+    && JSON.stringify(normalizeSchedulePayload(existing.schedule, existing.teacherId))
+      !== JSON.stringify(normalizeSchedulePayload(merged.schedule, merged.teacherId))
+  if (scheduleChanged) {
+    const reason = String(updates.scheduleReason || '').trim()
+    if (reason.length < 3) throw new Error('Jadval o‘zgarishining sababini kamida 3 ta belgi bilan yozing.')
+    await createScheduleChange({
+      requestId: crypto.randomUUID(),
+      groupId: id,
+      type: 'replace',
+      validFrom: tashkentTodayValue(),
+      schedule: merged.schedule.map((slot, index) => ({
+        ...slot,
+        slotId: String(slot.slotId || `slot-${index}`),
+      })),
+      reason,
+    })
+  }
+
   const patch = {}
   if (updates.name != null) patch.name = updates.name
-  if (updates.teacherId !== undefined || updates.schedule != null) {
+  if (!scheduleChanged && updates.teacherId !== undefined) {
     patch.teacher_id = merged.teacherId
-    patch.schedule = merged.schedule
   }
   if (updates.monthlyFee != null) patch.monthly_fee = merged.monthlyFee
 
@@ -945,6 +1009,34 @@ export async function updateReceptionUser({ id, name, username }) {
     username: normalizeUsername(username),
   })
   if (error) throw error
+}
+
+export async function previewScheduleChange(payload) {
+  return workerApiRequest('/api/schedule/preview', payload)
+}
+
+export async function createScheduleChange(payload) {
+  return workerApiRequest('/api/schedule/changes', payload)
+}
+
+export async function undoScheduleChange(changeId) {
+  return workerApiRequest(`/api/schedule/changes/${encodeURIComponent(changeId)}/undo`, {})
+}
+
+export async function getScheduleChangeHistory(groupId) {
+  return workerApiRequest(`/api/schedule/history?group_id=${encodeURIComponent(groupId)}`)
+}
+
+export async function scheduleHistory(groupId) {
+  return getScheduleChangeHistory(groupId)
+}
+
+export async function getScheduleNotifications() {
+  return workerApiRequest('/api/notifications')
+}
+
+export async function resendScheduleNotification(notificationId) {
+  return workerApiRequest(`/api/schedule/notifications/${encodeURIComponent(notificationId)}/resend`, {})
 }
 
 export { currentMonthYear }

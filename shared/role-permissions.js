@@ -30,7 +30,7 @@ export const ROLE_PERMISSIONS = Object.freeze({
     endpoints: Object.freeze([
       'auth:staff', 'student:telegram-invite', 'homework:read', 'questions:inbox',
       'questions:reply', 'files:homework-access', 'files:all-homework', 'data:staff-wide-read',
-      'data:reception-row-write', 'data:staff-wide-query',
+      'data:reception-row-write', 'data:staff-wide-query', 'schedule:read', 'schedule:manage',
     ]),
     pages: Object.freeze(['reception', 'students', 'groups', 'teachers', 'schedule', 'payments', 'attendance', 'homework', 'questions']),
     descriptions: Object.freeze([
@@ -54,7 +54,7 @@ export const ROLE_PERMISSIONS = Object.freeze({
       homework_submissions: read,
       homework_review_history: read,
     }),
-    endpoints: Object.freeze(['auth:staff', 'homework:read-write', 'attendance:mark', 'files:homework-access', 'questions:inbox', 'questions:reply']),
+    endpoints: Object.freeze(['auth:staff', 'homework:read-write', 'attendance:mark', 'files:homework-access', 'questions:inbox', 'questions:reply', 'schedule:read', 'schedule:manage-own']),
     pages: Object.freeze(['teacher', 'groups', 'attendance', 'schedule', 'homework', 'questions']),
     descriptions: Object.freeze([
       'Faqat biriktirilgan guruh va o‘quvchilar',
@@ -66,7 +66,7 @@ export const ROLE_PERMISSIONS = Object.freeze({
   student: Object.freeze({
     label: 'O‘quvchi',
     tables: Object.freeze({ homework_review_history: read }),
-    endpoints: Object.freeze(['miniapp:student', 'files:homework-access', 'questions:create']),
+    endpoints: Object.freeze(['miniapp:student', 'files:homework-access', 'questions:create', 'schedule:read', 'notifications:read']),
     pages: Object.freeze(['miniapp:student', 'questions']),
     descriptions: Object.freeze([
       'Faqat Telegram bot va Mini App',

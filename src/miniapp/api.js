@@ -1,4 +1,5 @@
 import { cloudflare } from '../lib/cloudflare.js'
+import { normalizeScheduleWeekdays } from '../../shared/schedule.js'
 
 function assertConfigured() {
   if (!cloudflare) throw new Error('Cloudflare API sozlanmagan.')
@@ -36,6 +37,34 @@ export async function fetchProfile(userId) {
 
 export async function loadStudentMiniAppOverview() {
   return workerApi('/api/miniapp/student/overview')
+}
+
+export async function loadScheduleNotifications() {
+  return workerApi('/api/notifications')
+}
+
+export async function previewScheduleChange(payload) {
+  return workerApi('/api/schedule/preview', { method: 'POST', body: JSON.stringify(payload) })
+}
+
+export async function createScheduleChange(payload) {
+  return workerApi('/api/schedule/changes', { method: 'POST', body: JSON.stringify(payload) })
+}
+
+export async function loadScheduleChangeHistory(groupId) {
+  return workerApi(`/api/schedule/history?group_id=${encodeURIComponent(groupId)}`)
+}
+
+export async function undoScheduleChange(changeId) {
+  return workerApi(`/api/schedule/changes/${encodeURIComponent(changeId)}/undo`, {
+    method: 'POST', body: JSON.stringify({}),
+  })
+}
+
+export async function resendScheduleNotification(notificationId) {
+  return workerApi(`/api/schedule/notifications/${encodeURIComponent(notificationId)}/resend`, {
+    method: 'POST', body: JSON.stringify({}),
+  })
 }
 
 async function uploadFile(file, context) {
@@ -104,9 +133,13 @@ export async function loadGroups(profile) {
     .select(columns)
     .order('name')
     .limit(500))
+  const scheduleState = await workerApi('/api/schedule/state')
+  const stateByGroup = new Map((scheduleState.groups || []).map((state) => [state.group_id, state]))
   return rows.map((group) => ({
     ...group,
-    schedule: Array.isArray(group.schedule) ? group.schedule : JSON.parse(group.schedule || '[]'),
+    schedule: normalizeScheduleWeekdays(Array.isArray(group.schedule) ? group.schedule : JSON.parse(group.schedule || '[]')),
+    scheduleVersions: stateByGroup.get(group.id)?.versions || [],
+    scheduleOverrides: stateByGroup.get(group.id)?.overrides || [],
   }))
 }
 

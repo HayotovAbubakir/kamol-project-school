@@ -16,6 +16,7 @@ import {
   writeToastedNotificationIds,
 } from '../lib/notifications'
 import { currentMonthYear } from '../lib/utils'
+import { getScheduleNotifications } from '../lib/api'
 
 const NotificationContext = createContext(null)
 
@@ -31,10 +32,57 @@ export function NotificationProvider({ children }) {
   const [seen, setSeen] = useState(() => readSeenNotificationIds())
   const [archive, setArchive] = useState(() => readNotificationArchive())
   const [toasts, setToasts] = useState([])
+  const [scheduleItems, setScheduleItems] = useState([])
+  const [scheduleError, setScheduleError] = useState('')
+  const [dismissedScheduleIds, setDismissedScheduleIds] = useState(() => {
+    try { return new Set(JSON.parse(localStorage.getItem('kamol-schedule-dismissed') || '[]')) } catch { return new Set() }
+  })
   const toastTimers = useRef(new Map())
 
   const isStaff = user?.role === 'owner' || user?.role === 'reception'
   const now = currentMonthYear()
+
+  useEffect(() => {
+    if (!user?.id) return undefined
+    let active = true
+    const load = async () => {
+      try {
+        const rows = await getScheduleNotifications()
+        if (!active) return
+        const mapped = (rows || []).map((row) => {
+          const date = new Date(row.scheduled_at)
+          const parts = Object.fromEntries(new Intl.DateTimeFormat('en-US', {
+            timeZone: 'Asia/Tashkent', month: 'numeric', year: 'numeric',
+          }).formatToParts(date).map(({ type, value }) => [type, value]))
+          const title = row.notification_kind === 'undo'
+            ? 'Jadval o‘zgarishi qaytarildi'
+            : row.notification_kind === 'reminder' ? 'Dars eslatmasi' : 'Jadval o‘zgarishi'
+          return {
+            id: `schedule:${row.id}`,
+            kind: 'schedule',
+            month: Number(parts.month),
+            year: Number(parts.year),
+            title: `${title}${row.group_name ? ` · ${row.group_name}` : ''}`,
+            text: row.message,
+            createdAt: row.scheduled_at,
+          }
+        })
+        setScheduleItems(mapped)
+        setScheduleError('')
+      } catch (error) {
+        if (!active) return
+        setScheduleError(error instanceof Error ? error.message : 'Jadval bildirishnomalarini yuklab bo‘lmadi.')
+      }
+    }
+    load()
+    const timer = window.setInterval(load, 60_000)
+    window.addEventListener('focus', load)
+    return () => {
+      active = false
+      window.clearInterval(timer)
+      window.removeEventListener('focus', load)
+    }
+  }, [user?.id])
 
   // Joriy oy live xabarlarini arxivga yozish
   useEffect(() => {
@@ -45,10 +93,12 @@ export function NotificationProvider({ children }) {
   }, [isStaff, initialized, data, t, now.month, now.year])
 
   const currentItems = useMemo(
-    () => archive
-      .filter((item) => !item.dismissed && item.month === now.month && item.year === now.year)
-      .map(withIcon),
-    [archive, now.month, now.year],
+    () => [
+      ...archive.filter((item) => !item.dismissed && item.month === now.month && item.year === now.year),
+      ...scheduleItems.filter((item) => item.month === now.month && item.year === now.year
+        && !dismissedScheduleIds.has(item.id)),
+    ].map(withIcon),
+    [archive, scheduleItems, dismissedScheduleIds, now.month, now.year],
   )
 
   const unreadCount = useMemo(
@@ -57,10 +107,12 @@ export function NotificationProvider({ children }) {
   )
 
   const getItemsForMonth = useCallback((month, year) => (
-    archive
-      .filter((item) => !item.dismissed && item.month === month && item.year === year)
-      .map(withIcon)
-  ), [archive])
+    [
+      ...archive.filter((item) => !item.dismissed && item.month === month && item.year === year),
+      ...scheduleItems.filter((item) => item.month === month && item.year === year
+        && !dismissedScheduleIds.has(item.id)),
+    ].map(withIcon)
+  ), [archive, scheduleItems, dismissedScheduleIds])
 
   const dismissToast = useCallback((id) => {
     setToasts((prev) => prev.filter((toast) => toast.id !== id))
@@ -97,6 +149,14 @@ export function NotificationProvider({ children }) {
   }, [currentItems])
 
   const dismissNotification = useCallback((id) => {
+    if (String(id).startsWith('schedule:')) {
+      setDismissedScheduleIds((previous) => {
+        const next = new Set(previous)
+        next.add(id)
+        try { localStorage.setItem('kamol-schedule-dismissed', JSON.stringify([...next])) } catch { /* local archive is optional */ }
+        return next
+      })
+    }
     setArchive(dismissFromArchive(id))
     setSeen((prev) => {
       if (prev.has(id)) return prev
@@ -146,8 +206,9 @@ export function NotificationProvider({ children }) {
       markAllRead,
       dismissNotification,
       getItemsForMonth,
+      scheduleError,
     }),
-    [currentItems, unreadCount, toasts, dismissToast, markAllRead, dismissNotification, getItemsForMonth],
+    [currentItems, unreadCount, toasts, dismissToast, markAllRead, dismissNotification, getItemsForMonth, scheduleError],
   )
 
   return (
@@ -169,6 +230,7 @@ export function useNotifications() {
       markAllRead: () => {},
       dismissNotification: () => {},
       getItemsForMonth: () => [],
+      scheduleError: '',
     }
   }
   return ctx

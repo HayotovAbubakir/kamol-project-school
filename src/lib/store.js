@@ -5,7 +5,7 @@ import { translate } from '../i18n/runtime'
 
 /** Dars slotidagi o‘qituvchi (slot > guruh fallback) */
 export function slotTeacherId(slot, group = null) {
-  return slot?.teacherId || group?.teacherId || null
+  return slot?.teacherId || slot?.teacher_id || group?.teacherId || group?.teacher_id || null
 }
 
 export function groupTeacherIds(group) {

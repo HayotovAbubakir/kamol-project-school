@@ -17,6 +17,7 @@ import {
   menuText,
   needLink,
   paymentsText,
+  scheduleText,
   statusText,
   unlinked,
   welcomeAskCode,
@@ -165,6 +166,11 @@ async function replyDavomat(ctx, db, student, webAppUrl) {
   await ctx.reply(attendanceText(rows), { reply_markup: mainKeyboard(webAppUrl) })
 }
 
+async function replyJadval(ctx, db, student, webAppUrl) {
+  const rows = await db.getStudentSchedule(student.id)
+  await ctx.reply(scheduleText(rows), { reply_markup: mainKeyboard(webAppUrl) })
+}
+
 async function replyTolov(ctx, db, student, webAppUrl) {
   const groups = await getStudentGroups(db, student.id)
   const rows = await getPaymentsForStudent(db, student.id, 50)
@@ -300,6 +306,14 @@ export function registerHandlers(bot, db, webAppUrl, token) {
     })
   })
 
+  bot.command('jadval', async (ctx) => {
+    await safeReply(ctx, async () => {
+      const student = await requireStudent(db, ctx.chat.id, ctx)
+      if (!student) return
+      await replyJadval(ctx, db, student, webAppUrl)
+    })
+  })
+
   bot.command('davomat', async (ctx) => {
     await safeReply(ctx, async () => {
       const student = await requireStudent(db, ctx.chat.id, ctx)
@@ -406,6 +420,10 @@ export function registerHandlers(bot, db, webAppUrl, token) {
         const student = existing.students
         if (text === BTN.holat) {
           await replyHolat(ctx, db, student, webAppUrl)
+          return
+        }
+        if (text === BTN.jadval) {
+          await replyJadval(ctx, db, student, webAppUrl)
           return
         }
         if (text === BTN.davomat) {

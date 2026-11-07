@@ -41,6 +41,7 @@ import {
 import { Avatar, Button as UiButton, Card as UiCard, ConfirmDialog, EmptyState, Skeleton, Toast } from './ui.jsx'
 import { parseParentPhones } from '../lib/phone.js'
 import { loginBaseFromName } from '../../shared/account-credentials.js'
+import { getEffectiveLesson, normalizeScheduleWeekdays } from '../../shared/schedule.js'
 import { canAccessEndpoint, canAccessPage } from '../../shared/role-permissions.js'
 import {
   closeQuestionTicket,
@@ -49,11 +50,13 @@ import {
   fetchHomeworkBotLink,
   fetchHomeworkFileBlob,
   loadHomeworkHistory,
+  loadScheduleNotifications,
   loadStudentMiniAppOverview,
   listQuestionTickets,
   replyQuestionTicket,
   uploadHomeworkDraftProof,
 } from './api.js'
+import ScheduleChangeSheet from './ScheduleChangeSheet.jsx'
 
 const roleLabels = {
   student: 'O‘quvchi',
@@ -126,6 +129,7 @@ const pageTitles = {
   detail: 'Vazifa tafsilotlari',
   profile: 'Profil',
   settings: 'Sozlamalar',
+  notifications: 'Bildirishnomalar',
 }
 
 function isStaff(role) {
@@ -175,6 +179,18 @@ function tashkentDateRange() {
     from: `${parts.year}-${parts.month}-01`,
     to: `${parts.year}-${parts.month}-${parts.day}`,
   }
+}
+
+function addIsoDays(value, days) {
+  const date = new Date(`${value}T12:00:00Z`)
+  date.setUTCDate(date.getUTCDate() + days)
+  return date.toISOString().slice(0, 10)
+}
+
+function displayIsoDate(value) {
+  if (!value) return '—'
+  const [year, month, day] = value.slice(0, 10).split('-')
+  return `${day}.${month}.${year}`
 }
 
 function formatDate(value) {
@@ -325,7 +341,7 @@ export default function MainApp() {
   const [staffUsernameAuto, setStaffUsernameAuto] = useState(true)
   const [teacherForm, setTeacherForm] = useState({ name: '', phone: '', monthlySalary: '', username: '', password: '', autoUsername: true })
   const [editingTeacherId, setEditingTeacherId] = useState(null)
-  const [groupForm, setGroupForm] = useState({ name: '', teacherId: '', monthlyFee: '', schedule: [{ day: '0', startTime: '', endTime: '' }] })
+  const [groupForm, setGroupForm] = useState({ name: '', teacherId: '', monthlyFee: '', schedule: [{ day: '1', startTime: '', endTime: '' }], scheduleReason: '' })
   const [editingGroupId, setEditingGroupId] = useState(null)
   const [paymentForm, setPaymentForm] = useState({ studentId: '', amount: '', month: String(new Date().getMonth() + 1), year: String(new Date().getFullYear()) })
   const [attendanceForm, setAttendanceForm] = useState({ studentId: '', groupId: '', status: 'present', note: '' })
@@ -336,6 +352,9 @@ export default function MainApp() {
   const [reviewStatusFilter, setReviewStatusFilter] = useState('all')
   const [reviewStudentFilter, setReviewStudentFilter] = useState('')
   const [questionTickets, setQuestionTickets] = useState([])
+  const [scheduleNotifications, setScheduleNotifications] = useState([])
+  const [readScheduleNotificationIds, setReadScheduleNotificationIds] = useState([])
+  const [scheduleChangeGroup, setScheduleChangeGroup] = useState(null)
   const [questionStatus, setQuestionStatus] = useState('')
   const [questionSearch, setQuestionSearch] = useState('')
   const [questionText, setQuestionText] = useState('')
@@ -370,14 +389,15 @@ export default function MainApp() {
   const thisMonthSubmissions = homeworks.filter((task) => (
     task.submission?.submitted_at && new Date(task.submission.submitted_at) >= monthStart
   ))
-  const scheduleEntries = studentGroups.flatMap((group) => (group.schedule || []).map((slot) => ({
-    ...slot,
-    groupId: group.id,
-    groupName: group.name,
-  })))
-  const weekdayIndex = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].indexOf(
-    new Intl.DateTimeFormat('en-US', { weekday: 'short', timeZone: 'Asia/Tashkent' }).format(new Date()),
-  )
+  const scheduleGroups = student ? studentGroups : groups
+  const scheduleToday = tashkentDateRange().to
+  const scheduleEntries = scheduleGroups.flatMap((group) => Array.from({ length: 14 }, (_, offset) => (
+    getEffectiveLesson(group.id, addIsoDays(scheduleToday, offset), {
+      group,
+      versions: group.scheduleVersions || [],
+      overrides: group.scheduleOverrides || [],
+    }).map((slot) => ({ ...slot, groupId: group.id, groupName: group.name }))
+  )).flat())
   const [currentHour, currentMinute] = new Intl.DateTimeFormat('en-GB', {
     hour: '2-digit',
     minute: '2-digit',
@@ -386,19 +406,22 @@ export default function MainApp() {
   }).format(new Date()).split(':').map(Number)
   const currentMinutes = currentHour * 60 + currentMinute
   const nextLesson = scheduleEntries
+    .filter((item) => !['cancelled', 'rescheduled'].includes(item.status))
     .map((item) => {
       const [hour, minute] = String(item.startTime || '00:00').split(':').map(Number)
       const startMinutes = hour * 60 + minute
-      let dayDistance = (Number(item.day) - weekdayIndex + 7) % 7
-      if (dayDistance === 0 && startMinutes < currentMinutes) dayDistance = 7
+      const dayDistance = Math.round((new Date(`${item.date}T12:00:00Z`).getTime()
+        - new Date(`${scheduleToday}T12:00:00Z`).getTime()) / 86_400_000)
       return { ...item, dayDistance, startMinutes }
     })
+    .filter((item) => item.dayDistance > 0 || item.startMinutes >= currentMinutes)
     .sort((left, right) => left.dayDistance - right.dayDistance || left.startMinutes - right.startMinutes)[0]
   const [currentYear, currentMonth] = tashkentDateRange().to.slice(0, 7).split('-').map(Number)
   const currentMonthPayments = payments.filter((item) => Number(item.month) === currentMonth && Number(item.year) === currentYear)
   const debtorCount = students.filter((person) => Number(person.monthly_fee || 0) > 0
     && !currentMonthPayments.some((payment) => payment.student_id === person.id)).length
-  const todayLessonCount = groups.reduce((count, group) => count + (group.schedule || []).filter((slot) => Number(slot.day) === weekdayIndex).length, 0)
+  const todayLessonCount = scheduleEntries.filter((lesson) => lesson.date === scheduleToday
+    && !['cancelled', 'rescheduled'].includes(lesson.status)).length
   const filteredStudents = students.filter((item) => `${item.name} ${item.phone} ${item.login || ''}`.toLowerCase().includes(studentSearch.toLowerCase()))
   const visibleStudents = filteredStudents.slice(studentPage * 20, (studentPage + 1) * 20)
   const filteredPayments = payments.filter((item) => `${item.student_name || ''} ${item.amount || ''} ${item.month || ''}.${item.year || ''}`.toLowerCase().includes(paymentSearch.toLowerCase()))
@@ -408,6 +431,7 @@ export default function MainApp() {
     : teacher
       ? homeworks.reduce((sum, task) => sum + (task.submissions || []).filter((item) => item.status === 'pending').length, 0)
       : questionTickets.reduce((sum, ticket) => sum + Number(ticket.unread_count || 0), 0)
+  const unreadScheduleCount = scheduleNotifications.filter((item) => !readScheduleNotificationIds.includes(item.id)).length
   const goBack = useCallback(() => {
     const previousPage = pageHistory.current.pop()
     setPage(previousPage || (page === 'detail' ? 'homework' : 'dashboard'))
@@ -443,6 +467,7 @@ export default function MainApp() {
       setHomeworks(tasks)
       setPayments(paymentRows)
       setAttendance(attendanceRows)
+      setScheduleNotifications(await loadScheduleNotifications())
       if (profile.role === 'teacher' || isStaff(profile.role)) {
         setGroups(await groupData.list(profile))
       }
@@ -509,6 +534,11 @@ export default function MainApp() {
         const nextProfile = { ...profile, teacherId: profile.teacher_id, mustResetPassword: Boolean(profile.must_reset_password) }
         if (active) {
           setUser(nextProfile)
+          try {
+            setReadScheduleNotificationIds(JSON.parse(localStorage.getItem(`kamol-mini-schedule-read-${nextProfile.id}`) || '[]'))
+          } catch {
+            setReadScheduleNotificationIds([])
+          }
           await refresh(nextProfile)
         }
       } catch {
@@ -1060,6 +1090,7 @@ export default function MainApp() {
         name: groupForm.name,
         teacherId: groupForm.teacherId,
         monthlyFee: groupForm.monthlyFee,
+        scheduleReason: groupForm.scheduleReason,
         schedule: groupForm.schedule
           .filter((slot) => slot.startTime || slot.endTime)
           .map((slot) => ({ ...slot, day: Number(slot.day), teacherId: groupForm.teacherId })),
@@ -1072,7 +1103,7 @@ export default function MainApp() {
         await groupManagement.create(payload, groups)
         setNotice('Guruh yaratildi.')
       }
-      setGroupForm({ name: '', teacherId: '', monthlyFee: '', schedule: [{ day: '0', startTime: '', endTime: '' }] })
+      setGroupForm({ name: '', teacherId: '', monthlyFee: '', schedule: [{ day: '1', startTime: '', endTime: '' }], scheduleReason: '' })
       await refresh(user)
     } catch (createError) {
       setError(createError.message || 'Guruhni yaratib bo‘lmadi.')
@@ -1119,6 +1150,7 @@ export default function MainApp() {
   function editGroup(item) {
     const schedule = Array.isArray(item.schedule) && item.schedule.length
       ? item.schedule.map((slot) => ({
+        slotId: slot.slotId,
         day: String(slot.day),
         startTime: slot.startTime || '',
         endTime: slot.endTime || '',
@@ -1132,6 +1164,7 @@ export default function MainApp() {
       teacherId: item.teacher_id || '',
       monthlyFee: String(item.monthly_fee || ''),
       schedule,
+      scheduleReason: '',
     })
     setError('')
     setNotice('')
@@ -1326,6 +1359,16 @@ export default function MainApp() {
     Object.values(studentPasswordTimers.current).forEach((timer) => window.clearTimeout(timer))
     studentPasswordTimers.current = {}
     setPage(nextPage)
+    if (nextPage === 'notifications') {
+      const ids = scheduleNotifications.map((item) => item.id)
+      setReadScheduleNotificationIds((current) => [...new Set([...current, ...ids])])
+      try {
+        localStorage.setItem(`kamol-mini-schedule-read-${user?.id || 'guest'}`,
+          JSON.stringify([...new Set([...readScheduleNotificationIds, ...ids])]))
+      } catch {
+        setError('Bildirishnomalar holatini saqlab bo‘lmadi.')
+      }
+    }
     window.scrollTo({ top: 0, behavior: 'smooth' })
   }
 
@@ -1381,12 +1424,12 @@ export default function MainApp() {
             <button
               type="button"
               className="mini-icon-button mini-notification-button"
-              onClick={() => navTo(student || teacher ? 'homework' : canAccessPage(role, 'questions') ? 'questions' : 'management')}
-              aria-label={`Bildirishnomalar${notificationCount ? `, ${notificationCount} ta` : ''}`}
+              onClick={() => navTo('notifications')}
+              aria-label={`Bildirishnomalar${notificationCount + unreadScheduleCount ? `, ${notificationCount + unreadScheduleCount} ta` : ''}`}
               title="Bildirishnomalar"
             >
               <Bell size={18} />
-              {notificationCount > 0 && <span className="mini-notification-badge">{notificationCount > 9 ? '9+' : notificationCount}</span>}
+              {notificationCount + unreadScheduleCount > 0 && <span className="mini-notification-badge">{notificationCount + unreadScheduleCount > 9 ? '9+' : notificationCount + unreadScheduleCount}</span>}
             </button>
             <button type="button" className="mini-icon-button" onClick={() => setMoreOpen((open) => !open)} aria-label="Ko‘proq menyu" aria-expanded={moreOpen}>
               <Ellipsis size={19} />
@@ -1465,7 +1508,7 @@ export default function MainApp() {
                   <Panel>
                     <p className="text-sm text-[var(--mini-muted)]">Keyingi dars</p>
                     {nextLesson
-                      ? <><p className="mt-2 text-lg font-bold">{nextLesson.groupName}</p><p className="mt-1 text-sm text-[var(--mini-muted)]">{['Dushanba', 'Seshanba', 'Chorshanba', 'Payshanba', 'Juma', 'Shanba', 'Yakshanba'][Number(nextLesson.day)]} · {nextLesson.startTime || 'Vaqt belgilanmagan'}</p></>
+                      ? <><p className="mt-2 text-lg font-bold">{nextLesson.groupName}</p><p className="mt-1 text-sm text-[var(--mini-muted)]">{displayIsoDate(nextLesson.date)} · {nextLesson.startTime || 'Vaqt belgilanmagan'}{nextLesson.status === 'changed' ? ' · O‘zgartirilgan' : ''}</p></>
                       : <p className="mt-2 text-sm text-[var(--mini-muted)]">Dars jadvali kiritilmagan.</p>}
                   </Panel>
                   <Panel>
@@ -1553,11 +1596,20 @@ export default function MainApp() {
                     <div key={group.id} className="rounded-2xl bg-[var(--mini-bg)] p-3">
                       <p className="font-semibold">{group.name}</p>
                       <p className="mt-1 text-sm text-[var(--mini-muted)]">
-                        {(group.schedule || []).map((slot) => `${['Dush.', 'Sesh.', 'Chor.', 'Pay.', 'Juma', 'Shan.', 'Yak.'][Number(slot.day)] || ''} ${slot.startTime || ''}${slot.endTime ? `–${slot.endTime}` : ''}`).join(' · ') || 'Dars jadvali kiritilmagan'}
+                        {normalizeScheduleWeekdays(group.schedule || []).map((slot) => `${['Dush.', 'Sesh.', 'Chor.', 'Pay.', 'Juma', 'Shan.', 'Yak.'][Number(slot.day) - 1] || ''} ${slot.startTime || ''}${slot.endTime ? `–${slot.endTime}` : ''}`).join(' · ') || 'Dars jadvali kiritilmagan'}
                       </p>
                       <p className="mt-1 text-xs text-[var(--mini-muted)]">
                         {students.filter((item) => item.group_id === group.id || item.groupId === group.id).length} nafar o‘quvchi
                       </p>
+                      {scheduleEntries.filter((lesson) => lesson.groupId === group.id
+                        && ['changed', 'cancelled', 'rescheduled'].includes(lesson.status)).slice(0, 3).map((lesson) => (
+                          <p key={`${lesson.slotId}-${lesson.date}`} className="mt-2 text-xs font-semibold text-[var(--mini-accent)]">
+                            {displayIsoDate(lesson.date)} · {lesson.status === 'cancelled' ? 'Bekor qilingan'
+                              : lesson.status === 'rescheduled' ? `Ko‘chirildi: ${displayIsoDate(lesson.newDate)}`
+                                : `O‘zgartirilgan · ${lesson.startTime}–${lesson.endTime}`}
+                          </p>
+                        ))}
+                      <ActionButton className="mini-secondary mt-2 min-h-11 w-full" onClick={() => setScheduleChangeGroup(group)}>O‘zgartirish</ActionButton>
                     </div>
                   ))}
                   {!groups.length && !loading && <p className="text-sm text-[var(--mini-muted)]">Sizga guruh biriktirilmagan.</p>}
@@ -1578,8 +1630,17 @@ export default function MainApp() {
                         {teachers.find((item) => item.id === group.teacher_id)?.name || 'O‘qituvchi biriktirilmagan'}
                       </p>
                       <p className="mt-1 text-xs text-[var(--mini-muted)]">
-                        {(group.schedule || []).map((slot) => `${['Dush.', 'Sesh.', 'Chor.', 'Pay.', 'Juma', 'Shan.', 'Yak.'][Number(slot.day)] || ''} ${slot.startTime || ''}${slot.endTime ? `–${slot.endTime}` : ''}`).join(' · ') || 'Jadval kiritilmagan'}
+                        {normalizeScheduleWeekdays(group.schedule || []).map((slot) => `${['Dush.', 'Sesh.', 'Chor.', 'Pay.', 'Juma', 'Shan.', 'Yak.'][Number(slot.day) - 1] || ''} ${slot.startTime || ''}${slot.endTime ? `–${slot.endTime}` : ''}`).join(' · ') || 'Jadval kiritilmagan'}
                       </p>
+                      {scheduleEntries.filter((lesson) => lesson.groupId === group.id
+                        && ['changed', 'cancelled', 'rescheduled'].includes(lesson.status)).slice(0, 3).map((lesson) => (
+                          <p key={`${lesson.slotId}-${lesson.date}`} className="mt-2 text-xs font-semibold text-[var(--mini-accent)]">
+                            {displayIsoDate(lesson.date)} · {lesson.status === 'cancelled' ? 'Bekor qilingan'
+                              : lesson.status === 'rescheduled' ? `Ko‘chirildi: ${displayIsoDate(lesson.newDate)}`
+                                : `O‘zgartirilgan · ${lesson.startTime}–${lesson.endTime}`}
+                          </p>
+                        ))}
+                      <ActionButton className="mini-secondary mt-2 min-h-11 w-full" onClick={() => setScheduleChangeGroup(group)}>O‘zgartirish</ActionButton>
                     </div>
                   ))}
                   {!groups.length && !loading && <p className="text-sm text-[var(--mini-muted)]">Guruhlar hali kiritilmagan.</p>}
@@ -1921,16 +1982,16 @@ export default function MainApp() {
               <Panel className="mt-4">
                 <h2 className="font-bold">Haftalik dars jadvali</h2>
                 <div className="mt-3 grid gap-2">
-                  {['Dushanba', 'Seshanba', 'Chorshanba', 'Payshanba', 'Juma', 'Shanba', 'Yakshanba'].map((day, index) => {
-                    const lessons = scheduleEntries.filter((item) => Number(item.day) === index)
-                      .sort((left, right) => String(left.startTime).localeCompare(String(right.startTime)))
-                    return lessons.length ? (
-                      <div key={day} className="rounded-2xl bg-[var(--mini-bg)] p-3">
-                        <p className="font-semibold">{day}</p>
-                        {lessons.map((lesson, lessonIndex) => <p key={`${lesson.groupId}-${lessonIndex}`} className="mt-1 text-sm text-[var(--mini-muted)]">{lesson.startTime || 'Vaqt yo‘q'}{lesson.endTime ? `–${lesson.endTime}` : ''} · {lesson.groupName}</p>)}
-                      </div>
-                    ) : null
-                  })}
+                  {scheduleEntries.map((lesson) => (
+                    <div key={`${lesson.groupId}-${lesson.slotId}-${lesson.date}`} className="rounded-2xl bg-[var(--mini-bg)] p-3">
+                      <p className="font-semibold">{displayIsoDate(lesson.date)} · {lesson.groupName}</p>
+                      <p className="mt-1 text-sm text-[var(--mini-muted)]">
+                        {lesson.status === 'cancelled' ? 'Dars bekor qilingan'
+                          : lesson.status === 'rescheduled' ? `Dars ${displayIsoDate(lesson.newDate)} sanasiga ko‘chirilgan`
+                            : `${lesson.startTime || 'Vaqt yo‘q'}${lesson.endTime ? `–${lesson.endTime}` : ''}${lesson.status === 'changed' ? ' · O‘zgartirilgan' : ''}`}
+                      </p>
+                    </div>
+                  ))}
                   {!scheduleEntries.length && <p className="text-sm text-[var(--mini-muted)]">Sizga dars jadvali biriktirilmagan.</p>}
                 </div>
               </Panel>
@@ -2160,7 +2221,7 @@ export default function MainApp() {
                 {groupForm.schedule.map((slot, index) => (
                   <div key={index} className="grid grid-cols-1 items-end gap-2 sm:grid-cols-[1fr_1fr_1fr_auto]">
                     <label className="mini-field"><span>Hafta kuni</span><select value={slot.day} onChange={(event) => setGroupForm((current) => ({ ...current, schedule: current.schedule.map((item, slotIndex) => slotIndex === index ? { ...item, day: event.target.value } : item) }))}>
-                      {['Dush.', 'Sesh.', 'Chor.', 'Pay.', 'Juma', 'Shan.', 'Yak.'].map((day, dayIndex) => <option key={day} value={dayIndex}>{day}</option>)}
+                      {['Dush.', 'Sesh.', 'Chor.', 'Pay.', 'Juma', 'Shan.', 'Yak.'].map((day, dayIndex) => <option key={day} value={dayIndex + 1}>{day}</option>)}
                     </select></label>
                     <label className="mini-field"><span>Boshlanish</span><input type="time" value={slot.startTime} onChange={(event) => setGroupForm((current) => ({ ...current, schedule: current.schedule.map((item, slotIndex) => slotIndex === index ? { ...item, startTime: event.target.value } : item) }))} /></label>
                     <label className="mini-field"><span>Tugash</span><input type="time" value={slot.endTime} onChange={(event) => setGroupForm((current) => ({ ...current, schedule: current.schedule.map((item, slotIndex) => slotIndex === index ? { ...item, endTime: event.target.value } : item) }))} /></label>
@@ -2168,9 +2229,10 @@ export default function MainApp() {
                   </div>
                 ))}
                 <div className="flex flex-wrap gap-2">
-                  <ActionButton className="mini-secondary" onClick={() => setGroupForm((current) => ({ ...current, schedule: [...current.schedule, { day: '0', startTime: '', endTime: '' }] }))}>Vaqt qo‘shish</ActionButton>
+                  <ActionButton className="mini-secondary" onClick={() => setGroupForm((current) => ({ ...current, schedule: [...current.schedule, { day: '1', startTime: '', endTime: '' }] }))}>Vaqt qo‘shish</ActionButton>
+                  {editingGroupId && <label className="mini-field"><span>Jadval o‘zgarish sababi</span><input value={groupForm.scheduleReason} onChange={(event) => setGroupForm({ ...groupForm, scheduleReason: event.target.value })} maxLength={500} placeholder="Sababini yozing" /></label>}
                   <ActionButton type="submit" disabled={busy}>{busy ? 'Saqlanmoqda…' : editingGroupId ? 'Guruhni saqlash' : 'Guruhni yaratish'}</ActionButton>
-                  {editingGroupId && <ActionButton className="mini-secondary" disabled={busy} onClick={() => { setEditingGroupId(null); setGroupForm({ name: '', teacherId: '', monthlyFee: '', schedule: [{ day: '0', startTime: '', endTime: '' }] }) }}>Bekor qilish</ActionButton>}
+                  {editingGroupId && <ActionButton className="mini-secondary" disabled={busy} onClick={() => { setEditingGroupId(null); setGroupForm({ name: '', teacherId: '', monthlyFee: '', schedule: [{ day: '1', startTime: '', endTime: '' }], scheduleReason: '' }) }}>Bekor qilish</ActionButton>}
                 </div>
               </form>
               <div className="mt-3 divide-y divide-[var(--mini-border)]">
@@ -2229,6 +2291,23 @@ export default function MainApp() {
             </div>
           </section>
         )}
+        {page === 'notifications' && (
+          <section className="mt-7">
+            <h1 className="text-xl font-extrabold">Bildirishnomalar</h1>
+            <div className="mt-4 grid gap-3">
+              {scheduleNotifications.map((item) => (
+                <Panel key={item.id}>
+                  <p className="font-semibold">{item.group_name || 'Dars jadvali'}</p>
+                  <p className="mt-2 whitespace-pre-line text-sm text-[var(--mini-muted)]">{item.message}</p>
+                  <p className="mt-2 text-xs text-[var(--mini-muted)]">{new Intl.DateTimeFormat('uz-UZ', {
+                    dateStyle: 'short', timeStyle: 'short', timeZone: 'Asia/Tashkent',
+                  }).format(new Date(item.scheduled_at))}</p>
+                </Panel>
+              ))}
+              {!scheduleNotifications.length && !loading && <EmptyState title="Hozircha bildirishnoma yo‘q" description="Jadval o‘zgarishlari haqida xabarlar shu yerda ko‘rinadi." />}
+            </div>
+          </section>
+        )}
       </div>
       <nav className="mini-bottom-nav" aria-label="Asosiy menyu">
         {visibleNav.map(({ id, label, icon: Icon }) => (
@@ -2238,6 +2317,14 @@ export default function MainApp() {
           </button>
         ))}
       </nav>
+      {scheduleChangeGroup && (
+        <ScheduleChangeSheet
+          group={scheduleChangeGroup}
+          role={role}
+          onClose={() => setScheduleChangeGroup(null)}
+          onSaved={() => refresh(user)}
+        />
+      )}
       <ConfirmDialog
         open={Boolean(confirmDialog)}
         title={confirmDialog?.title}

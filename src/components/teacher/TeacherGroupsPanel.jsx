@@ -1,22 +1,22 @@
 import { ClipboardCheck, Users } from 'lucide-react'
-import { useMemo } from 'react'
+import { useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { EmptyState } from '../ui'
 import { useLanguage } from '../../context/LanguageContext'
 import { getTodayDayValue } from '../../lib/analytics'
 import { slotTeacherId, teacherSlotsInGroup } from '../../lib/store'
+import { getGroupLessonSlotsOnDate } from '../../lib/analytics'
+import ScheduleChangeDialog from '../ScheduleChangeDialog'
 
 function formatTodaySlots(group, t, teacherId) {
   const day = getTodayDayValue()
   if (!day) return t('teacher.groups.noLessonToday')
-  const slots = (group.schedule || []).filter((s) => {
-    if (Number(s.day) !== day) return false
-    if (teacherId && slotTeacherId(s, group) !== teacherId) return false
-    return true
-  })
+  const slots = getGroupLessonSlotsOnDate(group, new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Tashkent' }))
+    .filter((slot) => !['cancelled', 'rescheduled'].includes(slot.status))
+    .filter((slot) => !teacherId || slotTeacherId(slot, group) === teacherId)
   if (!slots.length) return t('teacher.groups.noLessonToday')
   return slots
-    .map((s) => `${s.startTime}–${s.endTime}`)
+    .map((s) => `${s.startTime}–${s.endTime}${s.status === 'changed' ? ' · O‘zgartirilgan' : ''}`)
     .join(', ')
 }
 
@@ -38,6 +38,7 @@ export function TeacherGroupsPanel({
 }) {
   const { t } = useLanguage()
   const navigate = useNavigate()
+  const [scheduleChange, setScheduleChange] = useState(null)
 
   const rows = useMemo(() => groups.map((group) => {
     const marked = attendance.filter(
@@ -105,8 +106,19 @@ export function TeacherGroupsPanel({
             <ClipboardCheck size={16} />
             {t('teacher.groups.markAttendance')}
           </button>
+          <button type="button" className="btn btn-outline teacher-group-cta"
+            onClick={() => setScheduleChange({
+              group,
+              slotId: String(teacherSlotsInGroup(group, teacherId)[0]?.slotId || ''),
+            })}>
+            O‘zgartirish
+          </button>
         </article>
       ))}
+      {scheduleChange ? (
+        <ScheduleChangeDialog group={scheduleChange.group} initialSlotId={scheduleChange.slotId}
+          onClose={() => setScheduleChange(null)} />
+      ) : null}
     </div>
   )
 }

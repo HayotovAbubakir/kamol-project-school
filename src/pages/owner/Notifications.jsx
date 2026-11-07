@@ -19,7 +19,7 @@ function buildYearOptions(centerYear) {
 }
 
 export default function OwnerNotifications() {
-  const { getItemsForMonth, dismissNotification } = useNotifications()
+  const { getItemsForMonth, dismissNotification, scheduleError } = useNotifications()
   const { t } = useLanguage()
   const initial = currentMonthYear()
   const [month, setMonth] = useState(initial.month)
@@ -31,6 +31,7 @@ export default function OwnerNotifications() {
   return (
     <PageEnter>
       <div className="notif-page">
+        {scheduleError ? <p className="schedule-change-error" role="alert">{scheduleError}</p> : null}
         <div className="notif-page-toolbar">
           <div className="notif-month-pickers">
             <label className="notif-month-field">

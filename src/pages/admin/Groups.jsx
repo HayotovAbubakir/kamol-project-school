@@ -4,6 +4,7 @@ import { useNavigate } from 'react-router-dom'
 import MoneyInput from '../../components/MoneyInput'
 import Select from '../../components/Select'
 import { PageEnter } from '../../components/motion/PageMotion'
+import ScheduleChangeDialog from '../../components/ScheduleChangeDialog'
 import {
   Avatar,
   GlowButton,
@@ -43,15 +44,7 @@ function teacherNamesForGroup(group, teachers, missingLabel) {
     .join(', ') || missingLabel
 }
 
-function toMonthValue(year, month) {
-  return `${year}-${String(month).padStart(2, '0')}`
-}
-
-function parseMonthValue(value) {
-  const [y, m] = String(value || '').split('-').map(Number)
-  if (!y || !m) return null
-  return { year: y, month: m }
-}
+const MONTH_KEYS = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec']
 
 export default function AdminGroups() {
   const { data, addGroup, updateGroup, deleteGroup } = useData()
@@ -65,16 +58,19 @@ export default function AdminGroups() {
   const [error, setError] = useState('')
   const [saving, setSaving] = useState(false)
   const [copiedSlot, setCopiedSlot] = useState(null)
+  const [scheduleChange, setScheduleChange] = useState(null)
   const emptyForm = () => ({
     name: '',
     monthlyFee: '',
     schedule: [emptySlot()],
     studentIds: [],
+    scheduleReason: '',
   })
   const [form, setForm] = useState(emptyForm)
   const { month: curMonth, year: curYear } = currentMonthYear()
   const [financeMonth, setFinanceMonth] = useState(curMonth)
   const [financeYear, setFinanceYear] = useState(curYear)
+  const financeYears = useMemo(() => Array.from({ length: 21 }, (_, index) => curYear + 1 - index), [curYear])
   const [search, setSearch] = useState('')
 
   const totalStudents = useMemo(
@@ -114,7 +110,7 @@ export default function AdminGroups() {
           ? (teacherId || null)
           : (slotTeacherId(slot, group) || null),
       }))
-      await updateGroup(group.id, { schedule })
+      await updateGroup(group.id, { schedule, scheduleReason: 'O‘qituvchi darsiga biriktirildi' })
     } catch (err) {
       await alert({ message: err.message || t('domain.error.groupSaveFailed'), tone: 'danger' })
     } finally {
@@ -139,6 +135,7 @@ export default function AdminGroups() {
       monthlyFee: String(group.monthlyFee || ''),
       schedule: group.schedule?.length
         ? group.schedule.map((s) => ({
+          slotId: s.slotId,
           day: s.day,
           startTime: s.startTime,
           endTime: s.endTime,
@@ -146,6 +143,7 @@ export default function AdminGroups() {
         }))
         : [emptySlot()],
       studentIds: [...(group.studentIds || [])],
+      scheduleReason: '',
     })
     setOpen(true)
   }
@@ -161,6 +159,7 @@ export default function AdminGroups() {
         monthlyFee: Number(form.monthlyFee) || 0,
         schedule: form.schedule,
         studentIds: form.studentIds,
+        scheduleReason: form.scheduleReason,
       }
       if (editingId) {
         await updateGroup(editingId, payload)
@@ -247,17 +246,25 @@ export default function AdminGroups() {
         <div className="card group-finance-card">
           <div className="card-header group-finance-head">
             <strong>{t('admin.group.financeTitle')}</strong>
-            <input
-              type="month"
-              className="input group-finance-month"
-              value={toMonthValue(financeYear, financeMonth)}
-              onChange={(e) => {
-                const next = parseMonthValue(e.target.value)
-                if (!next) return
-                setFinanceYear(next.year)
-                setFinanceMonth(next.month)
-              }}
-            />
+            <div className="group-finance-month-selects">
+              <Select
+                className="group-finance-month"
+                value={financeMonth}
+                aria-label={t('common.month')}
+                onChange={(event) => setFinanceMonth(Number(event.target.value))}
+                options={MONTH_KEYS.map((key, index) => ({
+                  value: index + 1,
+                  label: t(`domain.month.${key}`),
+                }))}
+              />
+              <Select
+                className="group-finance-month"
+                value={financeYear}
+                aria-label={t('common.year')}
+                onChange={(event) => setFinanceYear(Number(event.target.value))}
+                options={financeYears.map((year) => ({ value: year, label: String(year) }))}
+              />
+            </div>
           </div>
           <div className="detail-meta-grid detail-meta-grid-3 group-finance-stats">
             <div className="detail-meta-item">
@@ -340,8 +347,9 @@ export default function AdminGroups() {
             ) : null}
             {selected.schedule.map((s, i) => {
               const tid = slotTeacherId(s, selected) || ''
+              const slotId = String(s.slotId || `slot-${i}`)
               return (
-                <div key={i} className="group-schedule-edit-row">
+                <div key={slotId} className="group-schedule-edit-row">
                   <div className="group-schedule-edit-meta">
                     <strong>{t(DAY_KEYS[s.day])}</strong>
                     <span>{s.startTime}–{s.endTime}</span>
@@ -355,6 +363,10 @@ export default function AdminGroups() {
                       ...data.teachers.map((item) => ({ value: item.id, label: item.name })),
                     ]}
                   />
+                  <button type="button" className="btn btn-outline btn-sm"
+                    onClick={() => setScheduleChange({ group: selected, slotId })}>
+                    O‘zgartirish
+                  </button>
                 </div>
               )
             })}
@@ -574,6 +586,14 @@ export default function AdminGroups() {
               </button>
             )}
           </div>
+          {editingId ? (
+            <div className="field">
+              <label htmlFor="schedule-reason">Jadval o‘zgarish sababi</label>
+              <input id="schedule-reason" className="input" maxLength="500" value={form.scheduleReason}
+                onChange={(event) => setForm({ ...form, scheduleReason: event.target.value })}
+                placeholder="Masalan: yangi o‘quv guruhi jadvali" />
+            </div>
+          ) : null}
           </section>
           <section className="form-section">
             <header className="form-section-head">
@@ -605,6 +625,13 @@ export default function AdminGroups() {
           </section>
         </form>
       </Modal>
+      {scheduleChange ? (
+        <ScheduleChangeDialog
+          group={scheduleChange.group}
+          initialSlotId={scheduleChange.slotId}
+          onClose={() => setScheduleChange(null)}
+        />
+      ) : null}
     </PageEnter>
   )
 }

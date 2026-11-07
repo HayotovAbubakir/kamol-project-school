@@ -8,10 +8,11 @@ import { useLanguage } from '../../context/LanguageContext'
 import {
   formatLessonTime,
   getGroupLessonSlotsOnDate,
+  getTashkentDateISO,
   groupHasLessonOnDate,
 } from '../../lib/analytics'
 import { groupsForTeacher } from '../../lib/store'
-import { formatPhone, todayISO } from '../../lib/utils'
+import { formatPhone } from '../../lib/utils'
 
 export default function TeacherAttendance() {
   const { user } = useAuth()
@@ -23,7 +24,7 @@ export default function TeacherAttendance() {
     () => groupsForTeacher(data.groups, user.teacherId),
     [data.groups, user.teacherId],
   )
-  const date = todayISO()
+  const date = getTashkentDateISO()
   const [notes, setNotes] = useState({})
   const [savingId, setSavingId] = useState(null)
 
@@ -36,8 +37,9 @@ export default function TeacherAttendance() {
     ? getGroupLessonSlotsOnDate(selectedGroup, date, user.teacherId)
     : []
   const todayTimes = todaySlots
-    .map((slot) => formatLessonTime({ time: slot.startTime, endTime: slot.endTime }))
+    .map((slot) => `${formatLessonTime({ time: slot.startTime, endTime: slot.endTime })}${slot.status === 'changed' ? ' · O‘zgartirilgan' : ''}`)
     .join(', ')
+  const cancelledToday = todaySlots.some((slot) => slot.status === 'cancelled')
 
   useEffect(() => {
     if (!groups.length) return
@@ -124,7 +126,7 @@ export default function TeacherAttendance() {
           <div className="attendance-toolbar-top">
             <div className="attendance-toolbar-title">
               <strong>{t('teacher.attendance.group')}</strong>
-              <span>{date}</span>
+              <span>{date.split('-').reverse().join('.')}</span>
             </div>
             <button type="button" className="btn btn-ghost btn-sm" onClick={() => navigate('/teacher/groups')}>
               {t('nav.myGroups')}
@@ -157,15 +159,15 @@ export default function TeacherAttendance() {
                 <strong>{t('teacher.attendance.progress', { marked: markedCount, total: students.length })}</strong>
               </>
             ) : (
-              <span className="attendance-toolbar-warning">{t('teacher.attendance.noLessonToday')}</span>
+              <span className="attendance-toolbar-warning">{cancelledToday ? 'Bugungi dars bekor qilingan.' : t('teacher.attendance.noLessonToday')}</span>
             )}
           </div>
         </div>
 
         {!hasLessonToday ? (
           <EmptyState
-            title={t('teacher.attendance.noLessonToday')}
-            description={t('teacher.attendance.noLessonTodayHint')}
+            title={cancelledToday ? 'Dars bekor qilingan' : t('teacher.attendance.noLessonToday')}
+            description={cancelledToday ? 'Davomat belgilash shart emas.' : t('teacher.attendance.noLessonTodayHint')}
           />
         ) : students.length === 0 ? (
           <EmptyState title={t('teacher.attendance.noStudents')} />

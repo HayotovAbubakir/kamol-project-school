@@ -25,6 +25,7 @@ export function menuText() {
   return [
     'Pastdagi tugmalardan tanlang:',
     '• Holat — shu oy to‘lov va guruhlar',
+    '• Jadval — yaqin 14 kun dars jadvali',
     '• Davomat — oxirgi 14 kun',
     '• To‘lovlar tarixi — barcha to‘lovlar',
     '• Uzish — bog‘lashni uzish',
@@ -98,6 +99,23 @@ export function attendanceText(rows) {
     return `${row.date} — ${status} (${group})`
   })
   return ['Oxirgi 14 kun davomat:', ...lines].join('\n')
+}
+
+export function scheduleText(rows) {
+  if (!rows.length) return 'Yaqin 14 kunda dars jadvali yo‘q.'
+  const weekdays = ['Yakshanba', 'Dushanba', 'Seshanba', 'Chorshanba', 'Payshanba', 'Juma', 'Shanba']
+  const lines = rows.map((lesson) => {
+    const date = lesson.date || ''
+    const parsedDate = new Date(`${date}T12:00:00Z`)
+    const weekday = Number.isNaN(parsedDate.getTime()) ? '' : weekdays[parsedDate.getUTCDay()]
+    const [year, month, day] = date.split('-')
+    const dateLabel = year && month && day ? `${day}.${month}.${year}` : date
+    const status = lesson.status === 'cancelled'
+      ? ' · BEKOR QILINGAN'
+      : lesson.status === 'changed' ? ' · O‘ZGARTIRILGAN' : ''
+    return `• ${dateLabel} (${weekday}) · ${lesson.startTime || '—'}–${lesson.endTime || '—'} · ${lesson.groupName}${status}${lesson.reason ? `\n  Sabab: ${lesson.reason}` : ''}`
+  })
+  return ['Yaqin 14 kun dars jadvali:', ...lines].join('\n')
 }
 
 /** To‘lovni guruh oyliklariga proporsional taqsimlash */

@@ -1,6 +1,7 @@
 import { studentMonthlyFee, studentPaidForMonth, isStudentDebtor, slotTeacherId } from './store'
 import { localDateISO } from './utils'
 import { getRuntimeLocale, translate } from '../i18n/runtime'
+import { getEffectiveLesson } from '../../shared/schedule.js'
 
 const MONTH_KEYS = [
   'jan', 'feb', 'mar', 'apr', 'may', 'jun',
@@ -119,50 +120,63 @@ export function getTrendDelta(trend, key) {
 }
 
 export function getScheduleDayForDate(dateInput) {
-  const date = typeof dateInput === 'string'
-    ? new Date(`${dateInput}T12:00:00`)
-    : dateInput
-  const jsDay = date.getDay()
-  return jsDay === 0 ? 7 : jsDay
+  const date = typeof dateInput === 'string' ? new Date(`${dateInput}T12:00:00Z`) : dateInput
+  const weekday = new Intl.DateTimeFormat('en-US', {
+    weekday: 'short',
+    timeZone: 'Asia/Tashkent',
+  }).format(date)
+  return ({ Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6, Sun: 7 })[weekday] || null
 }
 
 export function getTodayDayValue() {
   return getScheduleDayForDate(new Date())
 }
 
+export function getTashkentDateISO(date = new Date()) {
+  const parts = Object.fromEntries(new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Tashkent',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(date).map(({ type, value }) => [type, value]))
+  return `${parts.year}-${parts.month}-${parts.day}`
+}
+
 export function groupHasLessonOnDate(group, dateStr, teacherId = null) {
-  const day = getScheduleDayForDate(dateStr)
-  return (group.schedule || []).some((slot) => {
-    if (slot.day !== day) return false
-    if (teacherId && slotTeacherId(slot, group) !== teacherId) return false
-    return true
-  })
+  return getGroupLessonSlotsOnDate(group, dateStr, teacherId)
+    .some((slot) => !['cancelled', 'rescheduled'].includes(slot.status))
 }
 
 export function getGroupLessonSlotsOnDate(group, dateStr, teacherId = null) {
-  const day = getScheduleDayForDate(dateStr)
-  return (group.schedule || []).filter((slot) => {
-    if (slot.day !== day) return false
-    if (teacherId && slotTeacherId(slot, group) !== teacherId) return false
-    return true
-  })
+  return getEffectiveLesson(group.id, dateStr, {
+    group,
+    versions: group.scheduleVersions || [],
+    overrides: group.scheduleOverrides || [],
+  }).filter((slot) => !teacherId || slotTeacherId(slot, group) === teacherId)
 }
 
-export function getTodayLessons(data) {
-  const day = getTodayDayValue()
-  if (!day) return []
+export function getTodayLessons(data, { includeChanged = false } = {}) {
+  const date = getTashkentDateISO()
   const lessons = []
   for (const group of data.groups) {
-    for (const slot of group.schedule || []) {
-      if (slot.day !== day) continue
+    for (const slot of getGroupLessonSlotsOnDate(group, date)) {
+      if (!includeChanged && ['cancelled', 'rescheduled'].includes(slot.status)) continue
       const tid = slotTeacherId(slot, group)
       const teacher = data.teachers.find((t) => t.id === tid)
       lessons.push({
-        id: `${group.id}-${slot.day}-${slot.startTime}-${tid || 'none'}`,
+        id: `${group.id}-${slot.slotId}-${date}`,
         time: slot.startTime,
         endTime: slot.endTime,
         group: group.name,
         teacher: teacher?.name ?? '—',
+        status: slot.status,
+        reason: slot.reason,
+        newDate: slot.newDate,
+        originalStartTime: slot.originalStartTime,
+        originalEndTime: slot.originalEndTime,
+        date,
+        slotId: slot.slotId,
+        groupId: group.id,
       })
     }
   }
@@ -190,13 +204,11 @@ export function getDebtorCount(data, month, year) {
 
 /** Bugun darsi bor guruhlarda "absent" deb belgilangan o'quvchilar */
 export function getTodayAbsentStudents(data, date) {
-  const day = getTodayDayValue()
-  if (!day) return []
-
   const todayGroupIds = new Set()
   const groupMeta = {}
   for (const group of data.groups) {
-    const hasLesson = (group.schedule || []).some((slot) => slot.day === day)
+    const hasLesson = getGroupLessonSlotsOnDate(group, date)
+      .some((slot) => !['cancelled', 'rescheduled'].includes(slot.status))
     if (!hasLesson) continue
     todayGroupIds.add(group.id)
     groupMeta[group.id] = group

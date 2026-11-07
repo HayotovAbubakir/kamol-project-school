@@ -12,12 +12,14 @@ import {
   getLast6MonthsTrend,
   getTodayAbsentCount,
   formatLessonTime,
+  getTodayDayValue,
   getTodayLessons,
+  getTashkentDateISO,
   getTrendDelta,
   getTrendSparkline,
 } from '../../lib/analytics'
 import { getFinanceSummary } from '../../lib/store'
-import { currentMonthYear, formatMoney, todayISO } from '../../lib/utils'
+import { currentMonthYear, formatMoney } from '../../lib/utils'
 
 export default function OwnerDashboard() {
   const { data } = useData()
@@ -26,9 +28,9 @@ export default function OwnerDashboard() {
   const { pathname } = useLocation()
   const isReception = pathname.startsWith('/reception')
   const base = isReception ? '/reception' : '/owner'
-  const today = todayISO()
+  const today = getTashkentDateISO()
   const { month, year } = currentMonthYear()
-  const lessons = useMemo(() => getTodayLessons(data), [data])
+  const lessons = useMemo(() => getTodayLessons(data, { includeChanged: true }), [data])
   const debtorCount = useMemo(() => getDebtorCount(data, month, year), [data, month, year])
   const absentCount = useMemo(() => getTodayAbsentCount(data, today), [data, today])
   const finance = useMemo(() => getFinanceSummary(data), [data])
@@ -49,7 +51,7 @@ export default function OwnerDashboard() {
     }
   }
 
-  const isSunday = new Date().getDay() === 0
+  const isSunday = getTodayDayValue() === 7
 
   return (
     <PageEnter className="home-page">
@@ -104,7 +106,7 @@ export default function OwnerDashboard() {
             <Copy size={16} />
           </button>
         </div>
-        {isSunday ? (
+        {isSunday && !lessons.length ? (
           <EmptyState title={t('owner.schedule.dayOff')} />
         ) : lessons.length === 0 ? (
           <EmptyState title={t('owner.schedule.noLessons')} />
@@ -114,7 +116,12 @@ export default function OwnerDashboard() {
               {lessons.map((lesson) => (
                 <div key={lesson.id} className="home-lesson-row">
                   <span className="home-lesson-time">{formatLessonTime(lesson)}</span>
-                  <span className="home-lesson-group">{lesson.group}</span>
+                  <span className="home-lesson-group">
+                    {lesson.group}
+                    {lesson.status === 'changed' && <span className="schedule-change-badge">O‘zgartirilgan</span>}
+                    {lesson.status === 'cancelled' && <span className="schedule-cancel-badge">Bekor qilingan</span>}
+                    {lesson.status === 'rescheduled' && <span className="schedule-change-badge">Ko‘chirilgan · {lesson.newDate}</span>}
+                  </span>
                   <span className="home-lesson-teacher">{lesson.teacher}</span>
                 </div>
               ))}

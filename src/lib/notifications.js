@@ -1,4 +1,4 @@
-import { AlertTriangle, ClipboardCheck, Users, Wallet } from 'lucide-react'
+import { AlertTriangle, CalendarDays, ClipboardCheck, Users, Wallet } from 'lucide-react'
 import { getDebtorCount, getFrequentAbsenteeCount, getTodayLessons } from './analytics'
 import { groupHasTeacherAssigned } from './store'
 import { currentMonthYear, todayISO } from './utils'
@@ -9,6 +9,7 @@ export const NOTIF_ICONS = {
   'no-teacher': Users,
   'empty-groups': Users,
   attendance: ClipboardCheck,
+  schedule: CalendarDays,
 }
 
 export function resolveNotificationIcon(kind) {

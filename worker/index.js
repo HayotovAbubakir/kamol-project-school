@@ -6,6 +6,12 @@ import { calculateFinanceSummary, validateGroupSchedule } from './domain.js'
 import { hashInviteCode, verifyTelegramInitData } from './telegram-auth.js'
 import { canAccessEndpoint, canAccessTable as roleCanAccessTable } from '../shared/role-permissions.js'
 import { isValidLogin, loginBaseFromName } from '../shared/account-credentials.js'
+import {
+  findDateScheduleConflict,
+  getEffectiveLesson,
+  normalizeScheduleWeekdays,
+  timeToMinutes,
+} from '../shared/schedule.js'
 
 const TABLES = new Set([
   'profiles', 'teachers', 'groups', 'students', 'telegram_links', 'group_students',
@@ -553,6 +559,35 @@ function createWorkerBotDb(env, origin) {
       })
       return result.data || []
     },
+    async getStudentSchedule(studentId) {
+      const membership = await env.DB.prepare('SELECT group_id FROM group_students WHERE student_id = ?')
+        .bind(studentId).all()
+      const groupIds = (membership.results || []).map((row) => row.group_id)
+      if (!groupIds.length) return []
+      const state = await loadScheduleState(env, groupIds)
+      const start = tashkentToday()
+      const lessons = []
+      for (let offset = 0; offset < 14; offset += 1) {
+        const date = shiftScheduleDate(start, offset)
+        for (const group of state.groups) {
+          for (const lesson of getEffectiveLesson(group.id, date, {
+            group,
+            groups: state.groups,
+            versions: state.versions,
+            overrides: state.overrides,
+          })) {
+            if (lesson.status === 'rescheduled') continue
+            lessons.push({
+              ...lesson,
+              groupName: group.name,
+              date,
+            })
+          }
+        }
+      }
+      return lessons.sort((left, right) => left.date.localeCompare(right.date)
+        || String(left.startTime || '').localeCompare(String(right.startTime || '')))
+    },
     async selectHomework(chatId, homeworkId) {
       const result = await callWorkerBotApi(env, origin, '/api/bot/select-homework', {
         method: 'POST',
@@ -823,8 +858,15 @@ function teacherOwnsGroup(group, teacherId) {
 }
 
 async function ownedGroupIds(env, profile) {
-  const groups = await env.DB.prepare('SELECT id, teacher_id, schedule FROM groups').all()
-  return (groups.results || []).filter((group) => teacherOwnsGroup(group, profile.teacher_id)).map((group) => group.id)
+  const state = await loadScheduleState(env)
+  const today = tashkentToday()
+  return state.groups.filter((group) => {
+    const relevantVersions = state.versions.filter((version) => version.group_id === group.id
+      && (!version.valid_to || version.valid_to > today))
+    if (!relevantVersions.length) return teacherOwnsGroup(group, profile.teacher_id)
+    return relevantVersions.some((version) => normalizedSchedule(parsedSchedule(version.schedule))
+      .some((slot) => (slot.teacherId || group.teacher_id) === profile.teacher_id))
+  }).map((group) => group.id)
 }
 
 async function membershipGroupIds(env, studentId) {
@@ -849,7 +891,7 @@ async function canRead(env, profile, table, row) {
     return false
   }
   if (table === 'groups') {
-    if (profile.role === 'teacher') return teacherOwnsGroup(row, profile.teacher_id)
+    if (profile.role === 'teacher') return (await ownedGroupIds(env, profile)).includes(row.id)
     return (await membershipGroupIds(env, profile.student_id)).includes(row.id)
   }
   if (table === 'students') {
@@ -1058,6 +1100,9 @@ async function selectRows(env, profile, body, service) {
 async function mutateRows(env, profile, body, service) {
   const { table, action, filters = [], values, conflict } = body
   if (!WRITABLE.has(table) || !['insert', 'upsert', 'update', 'delete'].includes(action)) throw new Error('Invalid write operation')
+  if (table === 'groups' && action === 'update' && values && Object.hasOwn(values, 'schedule')) {
+    throw new Error('Use the schedule change endpoint to preserve schedule history.')
+  }
   if (table === 'payments' && action === 'upsert') throw new Error('Payment upsert is not supported; use an audited insert or update.')
   const allowedColumns = new Set(COLUMNS[table] || [])
   if (table === 'profiles') allowedColumns.delete('is_active')
@@ -1972,6 +2017,10 @@ async function handleDatabase(request, env, profile, service) {
   if (body.table === 'students' && action !== 'select') {
     return fail('Use the explicit student account endpoint.', 405)
   }
+  if (body.table === 'groups' && action === 'update' && body.values
+    && (Object.hasOwn(body.values, 'schedule') || Object.hasOwn(body.values, 'teacher_id'))) {
+    return fail('Jadval yoki o‘qituvchini jadval o‘zgarishi orqali yangilang.', 405)
+  }
   try {
     if (!body.action || body.action === 'select') {
       const rows = await selectRows(env, profile, body, service)
@@ -2324,6 +2373,7 @@ async function getStudentMiniAppOverview(request, env, profile) {
       FROM groups g JOIN group_students gs ON gs.group_id = g.id
       WHERE gs.student_id = ? ORDER BY g.name`).bind(profile.student_id).all(),
   ])
+  const scheduleState = await loadScheduleState(env, (groupRows.results || []).map((group) => group.id))
   return json({
     data: {
       homeworks,
@@ -2335,6 +2385,8 @@ async function getStudentMiniAppOverview(request, env, profile) {
       groups: (groupRows.results || []).map((group) => ({
         ...group,
         schedule: JSON.parse(group.schedule || '[]'),
+        scheduleVersions: scheduleState.versions.filter((version) => version.group_id === group.id),
+        scheduleOverrides: scheduleState.overrides.filter((override) => override.group_id === group.id),
       })),
     },
   })
@@ -2977,6 +3029,715 @@ async function paymentsHistory(request, env, profile) {
   return json({ data: rows.results || [] })
 }
 
+const WEEKDAY_NAMES = ['yakshanba', 'dushanba', 'seshanba', 'chorshanba', 'payshanba', 'juma', 'shanba']
+
+function scheduleDate(value) {
+  const date = String(value || '').trim()
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return null
+  const parsed = new Date(`${date}T12:00:00Z`)
+  return Number.isNaN(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== date ? null : date
+}
+
+function tashkentToday() {
+  const parts = Object.fromEntries(new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Tashkent',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(new Date()).map(({ type, value }) => [type, value]))
+  return `${parts.year}-${parts.month}-${parts.day}`
+}
+
+function shiftScheduleDate(date, days) {
+  const value = new Date(`${date}T12:00:00Z`)
+  value.setUTCDate(value.getUTCDate() + days)
+  return value.toISOString().slice(0, 10)
+}
+
+function scheduleWeekday(date) {
+  const jsDay = new Date(`${date}T12:00:00Z`).getUTCDay()
+  return jsDay === 0 ? 7 : jsDay
+}
+
+function scheduleDateLabel(date) {
+  const [year, month, day] = date.split('-')
+  const weekday = WEEKDAY_NAMES[new Date(`${date}T12:00:00Z`).getUTCDay()]
+  return `${day}.${month}.${year}, ${weekday}`
+}
+
+function parsedSchedule(value) {
+  if (Array.isArray(value)) return value
+  try {
+    const parsed = JSON.parse(value || '[]')
+    return Array.isArray(parsed) ? parsed : []
+  } catch {
+    return []
+  }
+}
+
+function normalizedSchedule(slots) {
+  const weekdays = normalizeScheduleWeekdays(slots)
+  return weekdays.map((slot, index) => ({
+    ...slot,
+    slotId: String(slot.slotId || slot.slot_id || `slot-${index}`),
+    day: Number(slot.day),
+    startTime: String(slot.startTime || ''),
+    endTime: String(slot.endTime || ''),
+    teacherId: slot.teacherId || slot.teacher_id || null,
+  }))
+}
+
+function activeWeeklySchedule(group, versions, date) {
+  const selected = versions
+    .filter((version) => version.group_id === group.id
+      && version.valid_from <= date
+      && (!version.valid_to || date < version.valid_to))
+    .sort((left, right) => left.valid_from.localeCompare(right.valid_from)
+      || String(left.created_at || '').localeCompare(String(right.created_at || ''))
+      || left.id.localeCompare(right.id))
+    .at(-1)
+  return normalizedSchedule(parsedSchedule(selected?.schedule ?? group.schedule))
+}
+
+async function loadScheduleState(env, groupIds = null) {
+  let groups
+  if (groupIds) {
+    const ids = [...new Set(groupIds)].slice(0, 500)
+    if (!ids.length) return { groups: [], versions: [], overrides: [] }
+    const placeholders = ids.map(() => '?').join(',')
+    const result = await env.DB.prepare(`SELECT id, name, teacher_id, schedule FROM groups WHERE id IN (${placeholders})`)
+      .bind(...ids).all()
+    groups = result.results || []
+  } else {
+    const result = await env.DB.prepare('SELECT id, name, teacher_id, schedule FROM groups').all()
+    groups = result.results || []
+  }
+  if (!groups.length) return { groups: [], versions: [], overrides: [] }
+  const placeholders = groups.map(() => '?').join(',')
+  const ids = groups.map((group) => group.id)
+  const [versionRows, overrideRows] = await Promise.all([
+    env.DB.prepare(`SELECT * FROM schedule_versions WHERE group_id IN (${placeholders})`).bind(...ids).all(),
+    env.DB.prepare(`SELECT * FROM schedule_overrides WHERE group_id IN (${placeholders}) AND reverted_at IS NULL`).bind(...ids).all(),
+  ])
+  return { groups, versions: versionRows.results || [], overrides: overrideRows.results || [] }
+}
+
+function currentDaySchedule(group, state, date) {
+  return activeWeeklySchedule(group, state.versions, date)
+}
+
+function teacherOwnsScheduleOnDate(group, state, teacherId, date) {
+  return currentDaySchedule(group, state, date).some((slot) => (
+    (slot.teacherId || group.teacher_id) === teacherId
+  ))
+}
+
+async function accessibleScheduleGroupIds(env, profile) {
+  if (['owner', 'reception'].includes(profile.role)) {
+    const { results } = await env.DB.prepare('SELECT id FROM groups ORDER BY name').all()
+    return (results || []).map((row) => row.id)
+  }
+  if (profile.role === 'teacher') {
+    return ownedGroupIds(env, profile)
+  }
+  if (profile.role === 'student' && profile.student_id) {
+    const { results } = await env.DB.prepare('SELECT group_id FROM group_students WHERE student_id = ?')
+      .bind(profile.student_id).all()
+    return (results || []).map((row) => row.group_id)
+  }
+  return []
+}
+
+async function scheduleRecipients(env, groupId, teacherIds, includeReception) {
+  const recipients = new Map()
+  const students = await env.DB.prepare(`SELECT s.id AS entity_id, s.name, s.telegram_id AS legacy_telegram_id,
+      p.id AS profile_id, p.telegram_id AS profile_telegram_id, tl.chat_id
+    FROM group_students gs
+    JOIN students s ON s.id = gs.student_id
+    LEFT JOIN profiles p ON p.student_id = s.id
+    LEFT JOIN accounts a ON a.id = p.id
+    LEFT JOIN telegram_links tl ON tl.student_id = s.id
+    WHERE gs.group_id = ? AND (p.id IS NULL OR a.is_active = 1)`).bind(groupId).all()
+  for (const student of students.results || []) {
+    const id = `student:${student.entity_id}`
+    const existing = recipients.get(id) || {
+      recipientId: student.profile_id || id,
+      entityId: student.entity_id,
+      name: student.name,
+      profileId: student.profile_id,
+      telegramId: null,
+    }
+    existing.telegramId ||= student.profile_telegram_id || student.legacy_telegram_id || student.chat_id || null
+    recipients.set(id, existing)
+  }
+
+  const ids = [...new Set(teacherIds.filter(Boolean))]
+  if (ids.length) {
+    const placeholders = ids.map(() => '?').join(',')
+    const teachers = await env.DB.prepare(`SELECT t.id AS entity_id, t.name, t.telegram_id AS legacy_telegram_id,
+        p.id AS profile_id, p.telegram_id AS profile_telegram_id
+      FROM teachers t LEFT JOIN profiles p ON p.teacher_id = t.id
+      WHERE t.id IN (${placeholders})`).bind(...ids).all()
+    for (const teacher of teachers.results || []) {
+      recipients.set(`teacher:${teacher.entity_id}`, {
+        recipientId: teacher.profile_id || `teacher:${teacher.entity_id}`,
+        entityId: teacher.entity_id,
+        name: teacher.name,
+        profileId: teacher.profile_id,
+        telegramId: teacher.profile_telegram_id || teacher.legacy_telegram_id || null,
+      })
+    }
+  }
+  if (includeReception) {
+    const reception = await env.DB.prepare(`SELECT p.id AS profile_id, p.name, p.telegram_id
+      FROM profiles p JOIN accounts a ON a.id = p.id
+      WHERE p.role = 'reception' AND a.is_active = 1`).all()
+    for (const person of reception.results || []) {
+      recipients.set(`reception:${person.profile_id}`, {
+        recipientId: person.profile_id,
+        entityId: person.profile_id,
+        name: person.name,
+        profileId: person.profile_id,
+        telegramId: person.telegram_id || null,
+      })
+    }
+  }
+  return [...recipients.values()]
+}
+
+function scheduleNoticeText({ groupName, type, kind, reason, oldLesson, newLesson }) {
+  const groupLine = `Guruh: ${groupName}`
+  const reasonLine = reason ? `Sabab: ${reason}` : ''
+  if (kind === 'reminder') {
+    const lessonDate = newLesson?.date || newLesson?.newDate || oldLesson?.date || '—'
+    return `Ertangi dars eslatmasi\n${groupLine}\nSana: ${scheduleDateLabel(lessonDate)}\nVaqt: ${newLesson?.startTime || oldLesson?.startTime || '—'}–${newLesson?.endTime || oldLesson?.endTime || '—'}`
+  }
+  if (kind === 'undo') {
+    const date = newLesson?.date || oldLesson?.date || '—'
+    return `Dars jadvalidagi o‘zgarish qaytarildi.\n${groupLine}\nSana: ${scheduleDateLabel(date)}\nVaqt: ${newLesson?.startTime || '—'}–${newLesson?.endTime || '—'}${reasonLine ? `\n${reasonLine}` : ''}`
+  }
+  if (type === 'replace') {
+    return `Haftalik jadval yangilandi.\n${groupLine}\nKuchga kirish sanasi: ${scheduleDateLabel(newLesson?.date || oldLesson?.date)}${reasonLine ? `\n${reasonLine}` : ''}`
+  }
+  if (type === 'single' && newLesson?.status === 'cancelled') {
+    return `Bir kunlik dars bekor qilindi.\n${groupLine}\nSana: ${scheduleDateLabel(oldLesson.date)}\nEski vaqt: ${oldLesson.startTime}–${oldLesson.endTime}${reasonLine ? `\n${reasonLine}` : ''}`
+  }
+  const effectiveDate = type === 'permanent' ? newLesson.date : (newLesson.newDate || newLesson.date)
+  const duration = type === 'permanent' ? 'Doimiy jadval o‘zgardi' : 'Bir kunlik dars o‘zgardi'
+  return `${duration}.\n${groupLine}\nSana: ${scheduleDateLabel(effectiveDate)}\nEski vaqt: ${oldLesson.startTime}–${oldLesson.endTime}\nYangi vaqt: ${newLesson.startTime}–${newLesson.endTime}${reasonLine ? `\n${reasonLine}` : ''}`
+}
+
+function scheduleReminderDate(date) {
+  const [year, month, day] = date.split('-').map(Number)
+  return new Date(Date.UTC(year, month - 1, day - 1, 13)).toISOString()
+}
+
+async function enqueueScheduleNotices(env, {
+  changeId, group, type, reason, oldLesson, newLesson, actorRole, recipients: providedRecipients,
+}) {
+  const teacherIds = [
+    oldLesson?.teacherId || group.teacher_id,
+    newLesson?.teacherId || group.teacher_id,
+  ]
+  const recipients = providedRecipients || await scheduleRecipients(env, group.id, teacherIds, actorRole === 'teacher')
+  const now = new Date().toISOString()
+  let reminderDate = null
+  if (type === 'single' && newLesson?.status !== 'cancelled') {
+    reminderDate = newLesson?.newDate || newLesson?.date || null
+  } else if (type === 'permanent' && newLesson?.day) {
+    reminderDate = newLesson.date
+    while (reminderDate && scheduleWeekday(reminderDate) !== Number(newLesson.day)) {
+      reminderDate = shiftScheduleDate(reminderDate, 1)
+    }
+  }
+  if (reminderDate && reminderDate <= tashkentToday()) reminderDate = null
+  const entries = []
+  for (const recipient of recipients) {
+    const kinds = ['change', ...(reminderDate ? ['reminder'] : [])]
+    for (const kind of kinds) {
+      const lessonDate = kind === 'reminder' ? reminderDate : (newLesson?.date || oldLesson?.date)
+      const scheduledAt = kind === 'reminder' ? scheduleReminderDate(lessonDate) : now
+      const message = scheduleNoticeText({ groupName: group.name, type, kind, reason, oldLesson, newLesson })
+      if (recipient.profileId) {
+        entries.push(env.DB.prepare(`INSERT OR IGNORE INTO schedule_notification_outbox
+          (id, change_id, recipient_id, recipient_name, channel, notification_kind, telegram_id, message,
+           status, scheduled_at, next_attempt_at, sent_at)
+          VALUES (?, ?, ?, ?, 'in_app', ?, ?, ?, ?, ?, ?, ?)`)
+          .bind(crypto.randomUUID(), changeId, recipient.profileId, recipient.name, kind, recipient.telegramId,
+            message, kind === 'reminder' ? 'queued' : 'sent', scheduledAt, scheduledAt, kind === 'reminder' ? null : now))
+      }
+      entries.push(env.DB.prepare(`INSERT OR IGNORE INTO schedule_notification_outbox
+        (id, change_id, recipient_id, recipient_name, channel, notification_kind, telegram_id, message,
+         status, scheduled_at, next_attempt_at)
+        VALUES (?, ?, ?, ?, 'telegram', ?, ?, ?, ?, ?, ?)` )
+        .bind(crypto.randomUUID(), changeId, recipient.recipientId, recipient.name, kind,
+          recipient.telegramId, message, recipient.telegramId ? 'queued' : 'not_linked', scheduledAt, scheduledAt))
+    }
+  }
+  return entries
+}
+
+function scheduleChangePayloadSchema() {
+  return z.object({
+    requestId: z.string().trim().min(8).max(128),
+    groupId: z.string().min(1).max(64),
+    type: z.enum(['single', 'permanent', 'replace']),
+    reason: z.string().trim().min(3).max(500),
+    slotId: z.string().min(1).max(80).optional(),
+    originalDate: z.string().optional(),
+    validFrom: z.string().optional(),
+    action: z.enum(['change', 'cancel']).optional(),
+    newDate: z.string().optional(),
+    startTime: z.string().optional(),
+    endTime: z.string().optional(),
+    day: z.number().int().min(1).max(7).optional(),
+    teacherId: z.string().max(64).nullable().optional(),
+    schedule: z.array(z.object({
+      slotId: z.string().min(1).max(80).optional(),
+      day: z.number().int().min(1).max(7),
+      startTime: z.string(),
+      endTime: z.string(),
+      teacherId: z.string().max(64).nullable().optional(),
+    }).strict()).max(30).optional(),
+  }).strict().superRefine((payload, context) => {
+    if (payload.type === 'replace' && !payload.schedule) {
+      context.addIssue({ code: 'custom', message: 'Haftalik jadval ma’lumotlari kiritilmagan.', path: ['schedule'] })
+    }
+  })
+}
+
+function groupById(state, groupId) {
+  return state.groups.find((group) => group.id === groupId) || null
+}
+
+function selectedSourceLesson(group, state, slotId, date) {
+  return getEffectiveLesson(group.id, date, { group, groups: state.groups, versions: state.versions, overrides: state.overrides })
+    .find((lesson) => lesson.slotId === slotId && !['cancelled', 'rescheduled'].includes(lesson.status))
+}
+
+function notifyCount(recipients) {
+  return recipients.length
+}
+
+async function validateScheduleChange(env, payload, profile) {
+  const state = await loadScheduleState(env)
+  const group = groupById(state, payload.groupId)
+  if (!group) return { error: 'Guruh topilmadi.', status: 404 }
+  const today = tashkentToday()
+  const startDate = scheduleDate(payload.type === 'single' ? payload.originalDate : payload.validFrom)
+  if (!startDate || startDate < today) return { error: 'O‘tgan sanani tanlab bo‘lmaydi.', status: 400 }
+  if (profile.role === 'teacher' && !teacherOwnsScheduleOnDate(group, state, profile.teacher_id, startDate)) {
+    return { error: 'Faqat o‘zingiz dars beradigan guruh jadvalini o‘zgartira olasiz.', status: 403 }
+  }
+
+  let oldLesson
+  let newLesson
+  if (payload.type === 'single') {
+    if (!payload.slotId || !payload.action) return { error: 'Dars o‘zgarishi to‘liq emas.', status: 400 }
+    oldLesson = selectedSourceLesson(group, state, payload.slotId, startDate)
+    if (!oldLesson) return { error: 'Tanlangan sanada bu guruhning darsi yo‘q.', status: 400 }
+    if (state.overrides.some((item) => item.group_id === group.id
+      && item.slot_id === payload.slotId && item.original_date === startDate)) {
+      return { error: 'Bu dars uchun allaqachon o‘zgarish bor.', status: 409 }
+    }
+    if (payload.action === 'cancel') {
+      newLesson = { ...oldLesson, status: 'cancelled', date: startDate }
+    } else {
+      const targetDate = scheduleDate(payload.newDate || startDate)
+      if (!targetDate) return { error: 'Yangi sana noto‘g‘ri.', status: 400 }
+      if (targetDate < today) return { error: 'O‘tgan sanaga dars ko‘chirib bo‘lmaydi.', status: 400 }
+      newLesson = {
+        ...oldLesson,
+        date: targetDate,
+        newDate: targetDate === startDate ? null : targetDate,
+        startTime: payload.startTime || oldLesson.startTime,
+        endTime: payload.endTime || oldLesson.endTime,
+        teacherId: payload.teacherId === undefined ? oldLesson.teacherId : payload.teacherId,
+        groupId: group.id,
+        status: 'changed',
+      }
+      const conflict = findDateScheduleConflict({
+        date: targetDate, lesson: newLesson, groups: state.groups, versions: state.versions,
+        overrides: state.overrides, excludeSlotId: targetDate === startDate ? payload.slotId : null,
+      })
+      if (conflict) return { error: conflict, status: 409 }
+    }
+  } else {
+    const nextSchedule = payload.type === 'replace'
+      ? normalizedSchedule(payload.schedule || [])
+      : activeWeeklySchedule(group, state.versions, startDate).map((slot) => ({ ...slot }))
+    const index = nextSchedule.findIndex((slot) => slot.slotId === payload.slotId)
+    if (payload.type === 'permanent' && index < 0) return { error: 'Tanlangan dars jadvalda topilmadi.', status: 404 }
+    const previousSchedule = activeWeeklySchedule(group, state.versions, startDate)
+    if (payload.type === 'permanent') {
+      oldLesson = previousSchedule[index]
+      nextSchedule[index] = {
+        ...nextSchedule[index],
+        day: payload.day ?? nextSchedule[index].day,
+        startTime: payload.startTime || nextSchedule[index].startTime,
+        endTime: payload.endTime || nextSchedule[index].endTime,
+        teacherId: payload.teacherId === undefined ? nextSchedule[index].teacherId : payload.teacherId,
+      }
+    } else {
+      oldLesson = { date: startDate, startTime: '', endTime: '' }
+    }
+    for (const slot of nextSchedule) {
+      if (timeToMinutes(slot.startTime) === null || timeToMinutes(slot.endTime) === null
+        || timeToMinutes(slot.endTime) <= timeToMinutes(slot.startTime)) {
+        return { error: 'Darsning tugash vaqti boshlanishidan keyin bo‘lishi kerak.', status: 400 }
+      }
+    }
+    for (let index = 0; index < nextSchedule.length; index += 1) {
+      const current = nextSchedule[index]
+      for (const other of nextSchedule.slice(index + 1)) {
+        if (current.day !== other.day) continue
+        const currentStart = timeToMinutes(current.startTime)
+        const currentEnd = timeToMinutes(current.endTime)
+        const otherStart = timeToMinutes(other.startTime)
+        const otherEnd = timeToMinutes(other.endTime)
+        if (currentStart < otherEnd && otherStart < currentEnd) {
+          return { error: 'Guruhning yangi jadvalida ikki dars ustma-ust kelmoqda.', status: 409 }
+        }
+      }
+    }
+    const horizon = 370
+    for (let offset = 0; offset < horizon; offset += 1) {
+      const date = shiftScheduleDate(startDate, offset)
+      const dayLessons = nextSchedule.filter((slot) => slot.day === scheduleWeekday(date))
+      for (const slot of dayLessons) {
+        const conflict = findDateScheduleConflict({
+          date, lesson: { ...slot, groupId: group.id, teacherId: slot.teacherId || group.teacher_id },
+          groups: state.groups, versions: state.versions, overrides: state.overrides,
+          excludeSlotId: slot.slotId,
+        })
+        if (conflict) return { error: conflict, status: 409 }
+      }
+    }
+    if (payload.type === 'permanent') {
+      newLesson = {
+        ...nextSchedule.find((slot) => slot.slotId === payload.slotId),
+        date: startDate,
+      }
+    } else {
+      newLesson = { date: startDate, startTime: '', endTime: '' }
+    }
+    const teacherIds = [...previousSchedule, ...nextSchedule].map((slot) => slot.teacherId || group.teacher_id)
+    const recipients = await scheduleRecipients(env, group.id, [...teacherIds, group.teacher_id], profile.role === 'teacher')
+    return { group, state, oldLesson, newLesson, nextSchedule, previousSchedule, recipients, startDate }
+  }
+  const recipients = await scheduleRecipients(env, group.id, [
+    oldLesson.teacherId || group.teacher_id,
+    newLesson.teacherId || group.teacher_id,
+  ], profile.role === 'teacher')
+  return { group, state, oldLesson, newLesson, recipients, startDate }
+}
+
+async function handleScheduleRoutes(request, env, profile, pathname) {
+  if (!profile) return fail('Tizimga kiring.', 401)
+  const url = new URL(request.url)
+  if (pathname === '/api/notifications' && request.method === 'GET') {
+    if (!canAccessEndpoint(profile.role, 'notifications:read') && !['owner', 'reception', 'teacher'].includes(profile.role)) {
+      return fail('Ruxsat yo‘q.', 403)
+    }
+    const now = new Date().toISOString()
+    const { results } = await env.DB.prepare(`SELECT o.id, o.change_id, o.notification_kind, o.message, o.scheduled_at,
+        o.sent_at, c.group_id, g.name AS group_name
+      FROM schedule_notification_outbox o
+      JOIN schedule_changes c ON c.id = o.change_id
+      JOIN groups g ON g.id = c.group_id
+      WHERE o.channel = 'in_app' AND o.recipient_id = ? AND o.status = 'sent' AND o.scheduled_at <= ?
+      ORDER BY o.scheduled_at DESC LIMIT 100`).bind(profile.id, now).all()
+    return json({ data: results || [] })
+  }
+
+  if (pathname === '/api/schedule/state' && request.method === 'GET') {
+    if (!canAccessEndpoint(profile.role, 'schedule:read')) return fail('Ruxsat yo‘q.', 403)
+    const groupIds = await accessibleScheduleGroupIds(env, profile)
+    const state = await loadScheduleState(env, groupIds)
+    return json({ data: { groups: state.groups.map((group) => ({
+      group_id: group.id,
+      versions: state.versions.filter((version) => version.group_id === group.id),
+      overrides: state.overrides.filter((override) => override.group_id === group.id),
+    })) } })
+  }
+
+  if (pathname === '/api/schedule/history' && request.method === 'GET') {
+    if (!canAccessEndpoint(profile.role, 'schedule:read')) return fail('Ruxsat yo‘q.', 403)
+    const groupId = url.searchParams.get('group_id')
+    if (!groupId || !(await accessibleScheduleGroupIds(env, profile)).includes(groupId)) return fail('Guruh topilmadi yoki ruxsat yo‘q.', 403)
+    const [events, changes] = await Promise.all([
+      env.DB.prepare(`SELECT e.*, p.name AS actor_name FROM schedule_change_events e
+        LEFT JOIN profiles p ON p.id = e.actor_id WHERE e.group_id = ? ORDER BY e.created_at DESC LIMIT 100`)
+        .bind(groupId).all(),
+      env.DB.prepare(`SELECT id, created_at FROM schedule_changes WHERE group_id = ? ORDER BY created_at DESC LIMIT 100`)
+        .bind(groupId).all(),
+    ])
+    const changeIds = (changes.results || []).map((row) => row.id)
+    const deliveries = changeIds.length
+      ? await env.DB.prepare(`SELECT id, change_id, recipient_id, recipient_name, channel, notification_kind, status,
+          attempts, last_error, sent_at, scheduled_at
+        FROM schedule_notification_outbox WHERE change_id IN (${changeIds.map(() => '?').join(',')})
+        ORDER BY created_at DESC`).bind(...changeIds).all()
+      : { results: [] }
+    return json({ data: { events: events.results || [], deliveries: deliveries.results || [] } })
+  }
+
+  if (pathname === '/api/schedule/preview' && request.method === 'POST') {
+    const parsed = scheduleChangePayloadSchema().safeParse(await request.json())
+    if (!parsed.success) return fail('Jadval o‘zgarishi ma’lumotlari noto‘g‘ri.', 400)
+    if (!canAccessEndpoint(profile.role, 'schedule:manage') && !canAccessEndpoint(profile.role, 'schedule:manage-own')) {
+      return fail('Jadval o‘zgartirishga ruxsat yo‘q.', 403)
+    }
+    const validation = await validateScheduleChange(env, parsed.data, profile)
+    if (validation.error) return fail(validation.error, validation.status)
+    return json({ data: { notificationCount: notifyCount(validation.recipients), oldLesson: validation.oldLesson, newLesson: validation.newLesson } })
+  }
+
+  if (pathname === '/api/schedule/changes' && request.method === 'POST') {
+    const parsed = scheduleChangePayloadSchema().safeParse(await request.json())
+    if (!parsed.success) return fail('Jadval o‘zgarishi ma’lumotlari noto‘g‘ri.', 400)
+    if (!canAccessEndpoint(profile.role, 'schedule:manage') && !canAccessEndpoint(profile.role, 'schedule:manage-own')) {
+      return fail('Jadval o‘zgartirishga ruxsat yo‘q.', 403)
+    }
+    const existingRequest = await env.DB.prepare('SELECT id FROM schedule_changes WHERE request_id = ?')
+      .bind(parsed.data.requestId).first()
+    if (existingRequest) return json({ data: { id: existingRequest.id, duplicate: true } })
+    const validation = await validateScheduleChange(env, parsed.data, profile)
+    if (validation.error) return fail(validation.error, validation.status)
+
+    const id = crypto.randomUUID()
+    const now = new Date().toISOString()
+    const oldData = {
+      lesson: validation.oldLesson,
+      schedule: validation.previousSchedule || null,
+      teacherId: validation.group.teacher_id,
+    }
+    const newData = {
+      lesson: validation.newLesson,
+      schedule: validation.nextSchedule || null,
+      teacherId: validation.nextSchedule?.find((slot) => slot.teacherId)?.teacherId || validation.group.teacher_id,
+      type: parsed.data.type,
+    }
+    const statements = [
+      env.DB.prepare(`INSERT INTO schedule_changes
+        (id, group_id, request_id, change_type, actor_id, reason, old_data, new_data, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+        .bind(id, validation.group.id, parsed.data.requestId, parsed.data.type, profile.id, parsed.data.reason,
+          JSON.stringify(oldData), JSON.stringify(newData), now),
+    ]
+    if (parsed.data.type === 'single') {
+      statements.push(env.DB.prepare(`INSERT INTO schedule_overrides
+        (id, group_id, slot_id, original_date, action, original_start_time, original_end_time,
+         new_start_time, new_end_time, new_date, new_teacher_id, reason, change_id, changed_by, changed_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+        .bind(crypto.randomUUID(), validation.group.id, parsed.data.slotId, validation.startDate,
+          parsed.data.action, validation.oldLesson.startTime, validation.oldLesson.endTime,
+          parsed.data.action === 'cancel' ? null : validation.newLesson.startTime,
+          parsed.data.action === 'cancel' ? null : validation.newLesson.endTime,
+          parsed.data.action === 'cancel' ? null : (validation.newLesson.newDate || validation.startDate),
+          parsed.data.action === 'cancel' ? null : validation.newLesson.teacherId,
+          parsed.data.reason, id, profile.id, now))
+    } else {
+      statements.push(env.DB.prepare(`UPDATE schedule_versions SET valid_to = ?
+        WHERE group_id = ? AND valid_to IS NULL`).bind(validation.startDate, validation.group.id))
+      statements.push(env.DB.prepare(`INSERT INTO schedule_versions
+        (id, group_id, valid_from, valid_to, schedule, change_id, created_by, created_at)
+        VALUES (?, ?, ?, NULL, ?, ?, ?, ?)`)
+        .bind(crypto.randomUUID(), validation.group.id, validation.startDate,
+          JSON.stringify(validation.nextSchedule), id, profile.id, now))
+      statements.push(env.DB.prepare('UPDATE groups SET teacher_id = ? WHERE id = ?')
+        .bind(newData.teacherId, validation.group.id))
+    }
+    statements.push(env.DB.prepare(`INSERT INTO schedule_change_events
+      (id, change_id, group_id, request_id, event_type, actor_id, details, created_at)
+      VALUES (?, ?, ?, ?, 'created', ?, ?, ?)`)
+      .bind(crypto.randomUUID(), id, validation.group.id, parsed.data.requestId, profile.id,
+        JSON.stringify({ oldData, newData, reason: parsed.data.reason }), now))
+    statements.push(...await enqueueScheduleNotices(env, {
+      changeId: id, group: validation.group, type: parsed.data.type, reason: parsed.data.reason,
+      oldLesson: validation.oldLesson, newLesson: validation.newLesson, actorRole: profile.role,
+      recipients: validation.recipients,
+    }))
+    try {
+      await env.DB.batch(statements)
+    } catch (error) {
+      if (/unique|constraint/i.test(error?.message || '')) {
+        const duplicate = await env.DB.prepare('SELECT id FROM schedule_changes WHERE request_id = ?')
+          .bind(parsed.data.requestId).first()
+        if (duplicate) return json({ data: { id: duplicate.id, duplicate: true } })
+        return fail('Bu dars uchun jadval o‘zgarishi mavjud.', 409)
+      }
+      throw error
+    }
+    return json({ data: { id, duplicate: false } }, 201)
+  }
+
+  const undoMatch = /^\/api\/schedule\/changes\/([^/]+)\/undo$/.exec(pathname)
+  if (undoMatch && request.method === 'POST') {
+    if (!canAccessEndpoint(profile.role, 'schedule:manage') && !canAccessEndpoint(profile.role, 'schedule:manage-own')) {
+      return fail('Jadval o‘zgarishini qaytarishga ruxsat yo‘q.', 403)
+    }
+    const change = await env.DB.prepare('SELECT * FROM schedule_changes WHERE id = ?').bind(decodeURIComponent(undoMatch[1])).first()
+    if (!change) return fail('O‘zgarish topilmadi.', 404)
+    if (change.status !== 'active') return fail('Bu o‘zgarish allaqachon qaytarilgan.', 409)
+    const state = await loadScheduleState(env, [change.group_id])
+    const group = groupById(state, change.group_id)
+    const today = tashkentToday()
+    const oldData = JSON.parse(change.old_data || '{}')
+    const newData = JSON.parse(change.new_data || '{}')
+    if (profile.role === 'teacher') {
+      const historicalTeacherIds = [
+        oldData.teacherId,
+        newData.teacherId,
+        oldData.lesson?.teacherId,
+        newData.lesson?.teacherId,
+        ...(oldData.schedule || []).map((slot) => slot.teacherId),
+        ...(newData.schedule || []).map((slot) => slot.teacherId),
+      ]
+      if (!historicalTeacherIds.includes(profile.teacher_id)) {
+        return fail('Faqat o‘zingizga tegishli jadval o‘zgarishini qaytara olasiz.', 403)
+      }
+    }
+    if (change.change_type !== 'single') {
+      const changedVersion = state.versions.find((version) => version.change_id === change.id)
+      const hasLaterVersion = changedVersion && state.versions.some((version) => (
+        version.group_id === change.group_id
+        && version.valid_from > changedVersion.valid_from
+        && version.id !== changedVersion.id
+      ))
+      if (hasLaterVersion) {
+        return fail('Keyinroq jadval o‘zgarishlari bor. Avval so‘nggi o‘zgarishni qaytaring.', 409)
+      }
+    }
+    const now = new Date().toISOString()
+    const statements = []
+    if (change.change_type === 'single') {
+      statements.push(env.DB.prepare('UPDATE schedule_overrides SET reverted_at = ? WHERE change_id = ? AND reverted_at IS NULL')
+        .bind(now, change.id))
+    } else {
+      const currentSchedule = activeWeeklySchedule(group, state.versions, today)
+      let restoredSchedule
+      if (change.change_type === 'replace') {
+        restoredSchedule = normalizedSchedule(oldData.schedule || [])
+      } else {
+        restoredSchedule = currentSchedule.map((slot) => ({ ...slot }))
+        const changedSlot = newData.lesson
+        const previousSlot = oldData.lesson
+        const index = restoredSchedule.findIndex((slot) => slot.slotId === changedSlot?.slotId)
+        if (index >= 0 && previousSlot) restoredSchedule[index] = { ...previousSlot, slotId: changedSlot.slotId }
+      }
+      if (!restoredSchedule) return fail('Oldingi jadvalni tiklab bo‘lmadi.', 409)
+      const undoId = crypto.randomUUID()
+      statements.push(env.DB.prepare('UPDATE schedule_versions SET valid_to = ? WHERE group_id = ? AND valid_to IS NULL')
+        .bind(today, group.id))
+      statements.push(env.DB.prepare(`INSERT INTO schedule_versions
+        (id, group_id, valid_from, valid_to, schedule, change_id, created_by, created_at)
+        VALUES (?, ?, ?, NULL, ?, ?, ?, ?)`)
+        .bind(crypto.randomUUID(), group.id, today, JSON.stringify(restoredSchedule), undoId, profile.id, now))
+      statements.push(env.DB.prepare('UPDATE groups SET teacher_id = ? WHERE id = ?')
+        .bind(oldData.teacherId || group.teacher_id, group.id))
+    }
+    statements.push(env.DB.prepare('UPDATE schedule_changes SET status = ?, reverted_at = ? WHERE id = ?')
+      .bind('reverted', now, change.id))
+    const undoRequestId = `undo:${change.id}`
+    statements.push(env.DB.prepare(`INSERT INTO schedule_change_events
+      (id, change_id, group_id, request_id, event_type, actor_id, details, created_at)
+      VALUES (?, ?, ?, ?, 'reverted', ?, ?, ?)`)
+      .bind(crypto.randomUUID(), change.id, group.id, null, profile.id,
+        JSON.stringify({ oldData: newData, newData: oldData, reason: change.reason, requestId: undoRequestId }), now))
+    const undoOldLesson = newData.lesson || oldData.lesson || {}
+    const undoNewLesson = oldData.lesson || newData.lesson || {}
+    const undoTeacherIds = [
+      undoOldLesson.teacherId || group.teacher_id,
+      undoNewLesson.teacherId || group.teacher_id,
+      ...(oldData.schedule || []).map((slot) => slot.teacherId || oldData.teacherId),
+      ...(newData.schedule || []).map((slot) => slot.teacherId || newData.teacherId),
+    ]
+    const recipients = await scheduleRecipients(env, group.id, undoTeacherIds, profile.role === 'teacher')
+    for (const recipient of recipients) {
+      for (const channel of ['in_app', 'telegram']) {
+        if (channel === 'in_app' && !recipient.profileId) continue
+        const telegramId = channel === 'telegram' ? recipient.telegramId : null
+        const status = channel === 'telegram' ? (telegramId ? 'queued' : 'not_linked') : 'sent'
+        statements.push(env.DB.prepare(`INSERT OR IGNORE INTO schedule_notification_outbox
+          (id, change_id, recipient_id, recipient_name, channel, notification_kind, telegram_id, message,
+           status, scheduled_at, next_attempt_at, sent_at)
+          VALUES (?, ?, ?, ?, ?, 'undo', ?, ?, ?, ?, ?, ?)`)
+          .bind(crypto.randomUUID(), change.id, recipient.profileId || recipient.recipientId,
+            recipient.name, channel, telegramId,
+            scheduleNoticeText({ groupName: group.name, type: change.change_type, kind: 'undo',
+              reason: change.reason, oldLesson: undoOldLesson, newLesson: undoNewLesson }),
+            status, now, now, status === 'sent' ? now : null))
+      }
+    }
+    try {
+      await env.DB.batch(statements)
+    } catch (error) {
+      console.error('Schedule undo failed', error instanceof Error ? error.message : 'UnknownError')
+      return fail('Jadval o‘zgarishini qaytarib bo‘lmadi.', 409)
+    }
+    return json({ data: { id: change.id, reverted: true } })
+  }
+
+  const resendMatch = /^\/api\/schedule\/notifications\/([^/]+)\/resend$/.exec(pathname)
+  if (resendMatch && request.method === 'POST') {
+    if (!STAFF.has(profile.role)) return fail('Faqat Egasi yoki Qabulxona qayta yubora oladi.', 403)
+    const notification = await env.DB.prepare(`SELECT o.* FROM schedule_notification_outbox o
+      JOIN schedule_changes c ON c.id = o.change_id
+      WHERE o.id = ? AND o.channel = 'telegram'`).bind(decodeURIComponent(resendMatch[1])).first()
+    if (!notification) return fail('Xabarnoma topilmadi.', 404)
+    if (notification.status !== 'failed') return fail('Faqat yuborilmagan xatoli xabarni qayta yuborish mumkin.', 409)
+    if (!notification.telegram_id) return fail('Telegram akkaunt ulanmagan.', 409)
+    await env.DB.prepare(`UPDATE schedule_notification_outbox
+      SET status = 'queued', attempts = 0, next_attempt_at = ?, last_error = NULL
+      WHERE id = ? AND status = 'failed'`).bind(new Date().toISOString(), notification.id).run()
+    return json({ data: { id: notification.id, status: 'queued' } })
+  }
+
+  return fail('Schedule route not found.', 404)
+}
+
+async function processScheduleNotificationOutbox(env) {
+  const now = new Date().toISOString()
+  await env.DB.prepare(`UPDATE schedule_notification_outbox SET status = 'queued'
+    WHERE status = 'sending' AND next_attempt_at <= ?`).bind(now).run()
+  const due = await env.DB.prepare(`SELECT * FROM schedule_notification_outbox
+    WHERE status = 'queued' AND scheduled_at <= ? AND next_attempt_at <= ?
+    ORDER BY scheduled_at, created_at LIMIT 20`).bind(now, now).all()
+  if (!due.results?.length) return
+  let bot = null
+  for (const item of due.results) {
+    const leaseUntil = new Date(Date.now() + 5 * 60 * 1000).toISOString()
+    const claim = await env.DB.prepare(`UPDATE schedule_notification_outbox
+      SET status = 'sending', next_attempt_at = ?
+      WHERE id = ? AND status = 'queued' AND scheduled_at <= ? AND next_attempt_at <= ?`)
+      .bind(leaseUntil, item.id, now, now).run()
+    if (!claim.meta?.changes) continue
+    try {
+      if (item.channel === 'telegram') {
+        if (!env.TELEGRAM_BOT_TOKEN) throw Object.assign(new Error('Telegram bot sozlanmagan.'), { retryable: false })
+        bot ||= await getWorkerBot(env, env.TELEGRAM_WEBAPP_URL ? new URL(env.TELEGRAM_WEBAPP_URL).origin : 'https://localhost')
+        await bot.api.sendMessage(item.telegram_id, item.message)
+      }
+      await env.DB.prepare(`UPDATE schedule_notification_outbox
+        SET status = 'sent', sent_at = ?, attempts = attempts + 1, last_error = NULL
+        WHERE id = ? AND status = 'sending'`).bind(now, item.id).run()
+    } catch (error) {
+      const attempts = Number(item.attempts || 0) + 1
+      const code = error?.error_code || error?.error?.error_code || 0
+      const retryAfter = Number(error?.parameters?.retry_after || error?.error?.parameters?.retry_after || 0)
+      const retry = error?.retryable !== false && code !== 403 && attempts < 8
+      const waitSeconds = retryAfter || Math.min(21600, 30 * (2 ** (attempts - 1)))
+      const nextAttempt = new Date(Date.now() + waitSeconds * 1000).toISOString()
+      const message = String(error?.description || error?.message || 'Telegramga yuborilmadi.').slice(0, 300)
+      await env.DB.prepare(`UPDATE schedule_notification_outbox
+        SET status = ?, attempts = ?, next_attempt_at = ?, last_error = ?
+        WHERE id = ? AND status = 'sending'`)
+        .bind(retry ? 'queued' : 'failed', attempts, nextAttempt, message, item.id).run()
+    }
+  }
+}
+
 async function handleRequest(request, env) {
   const url = new URL(request.url)
   if (!url.pathname.startsWith('/api/')) return env.ASSETS.fetch(request)
@@ -2999,6 +3760,15 @@ async function handleRequest(request, env) {
 
   const service = Boolean(env.BOT_API_SECRET && request.headers.get('X-Bot-Secret') === env.BOT_API_SECRET)
   const profile = await authenticate(request, env)
+  if (url.pathname === '/api/schedule/state'
+    || url.pathname === '/api/schedule/history'
+    || url.pathname === '/api/schedule/preview'
+    || url.pathname === '/api/schedule/changes'
+    || url.pathname.startsWith('/api/schedule/changes/')
+    || url.pathname.startsWith('/api/schedule/notifications/')
+    || url.pathname === '/api/notifications') {
+    return handleScheduleRoutes(request, env, profile, url.pathname)
+  }
   if (url.pathname === '/api/auth/me') {
     return profile
       ? json({ user: { ...profile, must_reset_password: Boolean(profile.password_reset_required) } })
@@ -3176,6 +3946,7 @@ export default {
     context.waitUntil(Promise.all([
       processBotEvents(env),
       expireHomeworkDrafts(env),
+      processScheduleNotificationOutbox(env),
     ]).catch((error) => {
       console.error('Scheduled tasks failed', error instanceof Error ? error.name : 'UnknownError')
     }))
