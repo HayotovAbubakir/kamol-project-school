@@ -13,6 +13,7 @@ const TABLES = new Set([
 const WRITABLE = new Set([...TABLES].filter((table) => table !== 'monthly_homework_report'))
 const STAFF = new Set(['owner', 'admin', 'reception'])
 const OWNER_ONLY = new Set(['salary_payments', 'expenses', 'staff_codes'])
+const PASSWORD_ITERATIONS = 100000
 const COLUMNS = {
   profiles: ['id', 'username', 'name', 'role', 'teacher_id', 'student_id', 'telegram_id', 'created_at'],
   teachers: ['id', 'name', 'phone', 'monthly_salary', 'telegram_id', 'created_at'],
@@ -207,8 +208,8 @@ async function authenticate(request, env) {
   }
 }
 
-async function derivePassword(password, salt, iterations = 120000) {
-  if (!Number.isInteger(iterations) || iterations < 100000 || iterations > 600000) {
+async function derivePassword(password, salt, iterations = PASSWORD_ITERATIONS) {
+  if (!Number.isInteger(iterations) || iterations < 1 || iterations > PASSWORD_ITERATIONS) {
     throw new Error('Invalid stored password hash parameters.')
   }
   const material = await crypto.subtle.importKey('raw', encoder.encode(password), 'PBKDF2', false, ['deriveBits'])
@@ -937,7 +938,7 @@ async function authLogin(request, env) {
     FROM profiles p JOIN accounts a ON a.id = p.id WHERE p.username = ? COLLATE NOCASE`)
     .bind(login).first()
   const salt = row?.password_salt || '00000000000000000000000000000000'
-  const iterations = row?.password_iterations || 120000
+  const iterations = row?.password_iterations || PASSWORD_ITERATIONS
   const hash = await derivePassword(parsed.data.password, salt, iterations)
   if (!row?.password_hash || !constantTimeEqual(hash, row.password_hash)) {
     return fail('Login yoki parol noto‘g‘ri.', 401)
@@ -983,8 +984,8 @@ async function authCreate(request, env, actor) {
   const teacherId = parsed.data.teacher_id || null
   const studentId = parsed.data.student_id || null
   await env.DB.batch([
-    env.DB.prepare('INSERT INTO accounts (id, password_hash, password_salt, password_iterations, password_reset_required) VALUES (?, ?, ?, 120000, 1)')
-      .bind(id, hash, salt),
+    env.DB.prepare('INSERT INTO accounts (id, password_hash, password_salt, password_iterations, password_reset_required) VALUES (?, ?, ?, ?, 1)')
+      .bind(id, hash, salt, PASSWORD_ITERATIONS),
     env.DB.prepare('INSERT INTO profiles (id, username, name, role, teacher_id, student_id) VALUES (?, ?, ?, ?, ?, ?)')
       .bind(id, username, name, role, teacherId, studentId),
     ...(studentId ? [env.DB.prepare('UPDATE students SET login = ?, auth_user_id = ? WHERE id = ?').bind(username, id, studentId)] : []),
@@ -1167,8 +1168,8 @@ async function handleRpc(request, env, actor, name) {
     const password = parsed.data.new_password
     const { hash, salt } = await hashPassword(password)
     await env.DB.prepare(`UPDATE accounts SET password_hash = ?, password_salt = ?,
-      password_iterations = 120000, password_reset_required = 1, session_version = session_version + 1
-      WHERE id = ?`).bind(hash, salt, parsed.data.target_user).run()
+      password_iterations = ?, password_reset_required = 1, session_version = session_version + 1
+      WHERE id = ?`).bind(hash, salt, PASSWORD_ITERATIONS, parsed.data.target_user).run()
     return json({ data: null, error: null })
   }
   return json({ data: null, error: { message: 'RPC not found' } }, 404)
@@ -1346,7 +1347,7 @@ async function handleOwnerSeed(request, env) {
   const { hash, salt } = await hashPassword(parsed.data.password)
   await env.DB.batch([
     env.DB.prepare(`INSERT INTO accounts (id, password_hash, password_salt, password_iterations, password_reset_required)
-      VALUES (?, ?, ?, 120000, 0)`).bind(id, hash, salt),
+      VALUES (?, ?, ?, ?, 0)`).bind(id, hash, salt, PASSWORD_ITERATIONS),
     env.DB.prepare(`INSERT INTO profiles (id, username, name, role)
       VALUES (?, ?, ?, 'owner')`).bind(id, username, parsed.data.name),
   ])
@@ -1412,8 +1413,8 @@ async function handleRequest(request, env) {
     if (!parsed.success) return fail('Password must be at least 8 characters.')
     const { hash, salt } = await hashPassword(parsed.data.password)
     await env.DB.prepare(`UPDATE accounts SET password_hash = ?, password_salt = ?,
-      password_iterations = 120000, password_reset_required = 0, session_version = session_version + 1
-      WHERE id = ?`).bind(hash, salt, profile.id).run()
+      password_iterations = ?, password_reset_required = 0, session_version = session_version + 1
+      WHERE id = ?`).bind(hash, salt, PASSWORD_ITERATIONS, profile.id).run()
     const updated = await env.DB.prepare(`SELECT p.*, a.password_reset_required, a.session_version
       FROM profiles p JOIN accounts a ON a.id = p.id WHERE p.id = ?`).bind(profile.id).first()
     return json(await issueSession(updated, env, false))
@@ -1496,7 +1497,7 @@ export default {
     } catch (error) {
       console.error('Worker request failed', {
         path: new URL(request.url).pathname,
-        error: error instanceof Error ? error.name : 'UnknownError',
+        error,
       })
       return secureResponse(fail('Internal server error.', 500), requestOrigin ? configuredOrigin : null)
     }

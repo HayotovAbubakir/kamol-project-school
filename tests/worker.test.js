@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { Miniflare } from 'miniflare'
 import worker, { canAccessTable } from '../worker/index.js'
 import { calculateFinanceSummary, validateGroupSchedule } from '../worker/domain.js'
@@ -71,7 +71,7 @@ beforeAll(async () => {
   })
   const db = await miniflare.getD1Database('DB')
   const schema = [
-    'CREATE TABLE accounts (id TEXT PRIMARY KEY, password_hash TEXT, password_salt TEXT, password_iterations INTEGER NOT NULL DEFAULT 120000, password_reset_required INTEGER NOT NULL DEFAULT 1, session_version INTEGER NOT NULL DEFAULT 0)',
+    'CREATE TABLE accounts (id TEXT PRIMARY KEY, password_hash TEXT, password_salt TEXT, password_iterations INTEGER NOT NULL DEFAULT 100000, password_reset_required INTEGER NOT NULL DEFAULT 1, session_version INTEGER NOT NULL DEFAULT 0)',
     'CREATE TABLE login_attempts (identifier TEXT PRIMARY KEY, attempts INTEGER NOT NULL DEFAULT 0, window_started_at INTEGER NOT NULL, blocked_until INTEGER NOT NULL DEFAULT 0)',
     "CREATE TABLE profiles (id TEXT PRIMARY KEY REFERENCES accounts(id) ON DELETE CASCADE, username TEXT NOT NULL UNIQUE COLLATE NOCASE, name TEXT NOT NULL, role TEXT NOT NULL CHECK (role IN ('owner', 'admin', 'teacher', 'student', 'reception')), teacher_id TEXT, student_id TEXT, telegram_id INTEGER, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)",
     'CREATE UNIQUE INDEX profiles_telegram_id_unique_idx ON profiles(telegram_id) WHERE telegram_id IS NOT NULL',
@@ -195,6 +195,39 @@ describe('server permission rules', () => {
 })
 
 describe('D1 worker routes and authentication', () => {
+  it('creates an owner with a PBKDF2 hash that can authenticate', async () => {
+    const stored = await env.DB.prepare(`SELECT a.password_hash, a.password_salt, a.password_iterations
+      FROM accounts a JOIN profiles p ON p.id = a.id WHERE p.username = 'owner'`).first()
+    expect(stored.password_hash).toMatch(/^[a-f0-9]{64}$/)
+    expect(stored.password_salt).toMatch(/^[a-f0-9]{32}$/)
+    expect(stored.password_iterations).toBe(100000)
+    expect(await loginOwner()).toHaveProperty('access_token')
+  })
+
+  it('logs owner seed exceptions while returning a generic server error', async () => {
+    const originalDatabase = env.DB
+    const failure = new Error('test seed failure')
+    const errorLog = vi.spyOn(console, 'error').mockImplementation(() => {})
+    env.DB = { prepare() { throw failure } }
+
+    try {
+      const response = await request('/api/auth/seed-owner', {
+        method: 'POST',
+        headers: { 'X-Owner-Seed-Secret': 'test-seed-secret' },
+        body: { username: 'probe-owner', name: 'Probe', password: 'secure-probe-password' },
+      })
+      expect(response.status).toBe(500)
+      expect(await response.json()).toEqual({ error: 'Internal server error.' })
+      expect(errorLog).toHaveBeenCalledWith('Worker request failed', {
+        path: '/api/auth/seed-owner',
+        error: failure,
+      })
+    } finally {
+      env.DB = originalDatabase
+      errorLog.mockRestore()
+    }
+  })
+
   it('creates a hashed, expiring Telegram invite and consumes it once', async () => {
     const ownerSession = await loginOwner()
     await env.DB.prepare('INSERT INTO students (id, name) VALUES (?, ?)').bind('telegram-student', 'Telegram Student').run()

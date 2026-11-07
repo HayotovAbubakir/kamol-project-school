@@ -4,7 +4,7 @@ CREATE TABLE accounts (
   id TEXT PRIMARY KEY,
   password_hash TEXT,
   password_salt TEXT,
-  password_iterations INTEGER NOT NULL DEFAULT 120000,
+  password_iterations INTEGER NOT NULL DEFAULT 100000,
   password_reset_required INTEGER NOT NULL DEFAULT 1,
   session_version INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
