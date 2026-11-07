@@ -21,16 +21,21 @@
 `STUDENT_PASSWORD_KEY` 32 bayt tasodifiy kalit bo‘lishi kerak (64 hex belgi). Bir marta yarating, hech qachon chatga, source control’ga yoki terminal log’iga yozmang. GitHub Actions deploy ishlatish uchun uni repo `Settings → Secrets and variables → Actions` ichida `STUDENT_PASSWORD_KEY` nomi bilan saqlang. PowerShell’da clipboard’ga xavfsiz tayyorlash:
 
 ```powershell
-$key = [Convert]::ToHexString([System.Security.Cryptography.RandomNumberGenerator]::GetBytes(32)).ToLowerInvariant()
+$bytes = New-Object byte[] 32
+[System.Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($bytes)
+$key = ([BitConverter]::ToString($bytes)).Replace('-', '').ToLowerInvariant()
 Set-Clipboard -Value $key
-Remove-Variable key
+[Array]::Clear($bytes, 0, $bytes.Length)
+Remove-Variable key, bytes
 ```
 
 Clipboard’dagi qiymatni GitHub secret maydoniga joylashtirgach clipboard’ni tozalang. Local Wrangler deploy ishlatilsa, ayni kalitni yana yaratmang; `npx wrangler secret put STUDENT_PASSWORD_KEY` buyrug‘iga GitHub secret’dagi mavjud qiymatni terminal prompt’ida kiriting. Kalit almashtirilsa, oldingi ciphertext’lar ochilmaydi; avval barcha o‘quvchi parollarini xavfsiz yangilash rejasini tuzing.
 
-GitHub deploy uchun `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_API_URL`, `AUTH_SECRET`, `BOT_API_SECRET`, `STUDENT_PASSWORD_KEY`, `TELEGRAM_BOT_TOKEN` va `TELEGRAM_WEBHOOK_SECRET` Actions secrets talab qilinadi. Workflow D1 migration’larni remote’ga qo‘llaydi, Worker secret’larini sozlab deploy qiladi, so‘ng `/api/health` tekshiradi. Secret qiymatlarini log’ga chiqarish yoki commit qilish mumkin emas.
+GitHub deploy uchun `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_API_URL`, `AUTH_SECRET`, `BOT_API_SECRET`, `STUDENT_PASSWORD_KEY`, `TELEGRAM_BOT_TOKEN` va `TELEGRAM_WEBHOOK_SECRET` Actions secrets talab qilinadi. `CLOUDFLARE_API_TOKEN` uchun Cloudflare Dashboard → **My Profile → API Tokens** orqali token yarating; D1 Read/Edit, R2 Storage Read/Edit va Workers Scripts Edit huquqlarini faqat shu account uchun bering. Hozirgi GitHub Actions token Cloudflare API’dan HTTP 401 olayotgani sababli avtomatik deploy uchun shu secret’ni yangi token bilan almashtirish kerak. Lokal Wrangler OAuth bilan deploy qilish mumkin, lekin Actions secret yangilanmaydi.
 
-Migration `0005_account_credentials.sql` profile phone, o‘quvchi credential ciphertext/IV va credential/auth audit jadvallarini qo‘shadi; Telegram link’da har bir o‘quvchi uchun unique constraint o‘rnatadi. `0004_roles_homework_questions.sql` va `0005` migration’larini tekshirilmagan DB’da qo‘lda qayta qo‘llamang; deploy workflow migration holatini boshqaradi.
+Workflow D1 migration’ларни remote’га qo‘llaydi, Worker secret’larini sozlab deploy qiladi, so‘ng `/api/health` tekshiradi. Secret qiymatlarini log’ga chiqarish yoki commit qilish mumkin emas.
+
+Migration `0005_account_credentials.sql` profile phone, o‘quvchi credential ciphertext/IV va credential/auth audit jadvallarini qo‘shadi; Telegram link’da har bir o‘quvchi uchun unique constraint o‘rnatadi. `0006_homework_report.sql` upstream migration’dan keyin oylik hisobot view’ini yangi urinish/result ustunlariga moslaydi. `0004`–`0006` migration’larini tekshirilmagan DB’da qo‘lda qayta qo‘llamang; deploy workflow migration holatini boshqaradi.
 
 ## Chiqarishdan keyingi tekshiruv
 
