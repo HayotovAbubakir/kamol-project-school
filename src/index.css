@@ -5759,3 +5759,116 @@ html[data-wallpaper="video"] *::after {
     flex: 1 1 100%;
   }
 }
+
+/* ── Questions inbox toolbar ── */
+.question-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 12px;
+  padding: 16px;
+}
+
+.question-toolbar .field {
+  margin: 0;
+}
+
+.question-toolbar-field {
+  flex: 0 0 220px;
+}
+
+.question-toolbar-search {
+  flex: 1 1 280px;
+  min-width: 0;
+}
+
+.question-toolbar-side {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
+
+.question-unread-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 9px 14px;
+  border-radius: 999px;
+  border: 1px solid var(--glass-border-subtle);
+  background: var(--glass-bg);
+  color: var(--muted);
+  font-size: 0.8125rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.question-unread-chip strong {
+  color: var(--text);
+  font-size: 0.9375rem;
+}
+
+.question-ticket {
+  transition: border-color 0.18s ease, transform 0.18s ease;
+}
+
+.question-ticket.is-unread {
+  border-left: 3px solid var(--accent);
+}
+
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 240px;
+  padding: 44px 20px;
+  text-align: center;
+  color: var(--muted);
+}
+
+.empty-state svg {
+  opacity: 0.6;
+}
+
+.empty-state strong {
+  margin-top: 6px;
+  color: var(--text);
+  font-size: 1.0625rem;
+}
+
+.empty-state span {
+  font-size: 0.875rem;
+  max-width: 44ch;
+}
+
+.empty-state .btn {
+  margin-top: 12px;
+}
+
+.skeleton-row {
+  height: 76px;
+  border-radius: var(--radius);
+  background: linear-gradient(90deg, var(--glass-bg) 25%, var(--glass-bg-strong) 37%, var(--glass-bg) 63%);
+  background-size: 400% 100%;
+  animation: skeleton-shimmer 1.4s ease infinite;
+}
+
+@keyframes skeleton-shimmer {
+  0% { background-position: 100% 0; }
+  100% { background-position: 0 0; }
+}
+
+@media (max-width: 640px) {
+  .question-toolbar-field,
+  .question-toolbar-search {
+    flex: 1 1 100%;
+  }
+
+  .question-toolbar-side {
+    margin-left: 0;
+    width: 100%;
+    justify-content: space-between;
+  }
+}
