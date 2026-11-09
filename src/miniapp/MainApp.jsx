@@ -338,6 +338,7 @@ export default function MainApp() {
   const [staffForm, setStaffForm] = useState({ name: '', phone: '', role: 'reception', username: '', password: '' })
   const [editingStaffId, setEditingStaffId] = useState(null)
   const [staffUsernameAuto, setStaffUsernameAuto] = useState(true)
+  const [staffFormOpen, setStaffFormOpen] = useState(false)
   const [teacherForm, setTeacherForm] = useState({ name: '', phone: '', monthlySalary: '', username: '', password: '', autoUsername: true })
   const [editingTeacherId, setEditingTeacherId] = useState(null)
   const [groupForm, setGroupForm] = useState({ name: '', teacherId: '', monthlyFee: '', schedule: [{ day: '1', startTime: '', endTime: '' }], scheduleReason: '' })
@@ -658,7 +659,9 @@ export default function MainApp() {
     const app = window.Telegram?.WebApp
     if (!app || !app.isVersionAtLeast?.('6.1')) return undefined
     const onBack = () => goBack()
-    const formId = page === 'management'
+    const formId = page === 'staff' && role === 'owner' && staffFormOpen
+      ? 'mini-staff-form'
+      : page === 'management'
       ? editingGroupId ? 'mini-group-form' : editingTeacherId ? 'mini-teacher-form' : 'mini-student-form'
       : page === 'homework' && teacher && selectedId === 'new'
         ? 'mini-homework-form'
@@ -678,7 +681,9 @@ export default function MainApp() {
     }
 
     if (formId) {
-      const mainButtonText = page === 'management'
+      const mainButtonText = page === 'staff'
+        ? editingStaffId ? 'Xodimni saqlash' : 'Xodim qo‘shish'
+        : page === 'management'
         ? editingGroupId ? 'Guruhni saqlash' : editingTeacherId ? 'O‘qituvchini saqlash' : editingStudentId ? 'O‘quvchini saqlash' : 'O‘quvchini yaratish'
         : page === 'homework' ? 'Vazifani yuborish'
           : page === 'questions' ? 'Savol yuborish'
@@ -699,7 +704,7 @@ export default function MainApp() {
       app.MainButton?.offClick(onMainClick)
       app.MainButton?.hide()
     }
-  }, [page, student, selectedHomework, selectedHomeworkSubmissionLocked, editingStudentId, editingTeacherId, editingGroupId, teacher, privileged, selectedId, goBack, busy])
+  }, [page, student, selectedHomework, selectedHomeworkSubmissionLocked, editingStudentId, editingTeacherId, editingGroupId, editingStaffId, staffFormOpen, role, teacher, privileged, selectedId, goBack, busy])
 
   useEffect(() => {
     if (!user) return undefined
@@ -1086,6 +1091,7 @@ export default function MainApp() {
       setStaffForm({ name: '', phone: '', role: 'reception', username: '', password: '' })
       setStaffUsernameAuto(true)
       setEditingStaffId(null)
+      setStaffFormOpen(false)
       setStaffRows(await staffData.list())
       setNotice('Xodim akkaunti saqlandi.')
     } catch (staffError) {
@@ -1675,8 +1681,24 @@ export default function MainApp() {
             <Panel>
               <div className="flex items-center justify-between gap-3">
                 <h2 className="font-bold">Xodimlar</h2>
-                <ActionButton onClick={() => navTo('management')}><Plus size={16} /> Xodim qo‘shish</ActionButton>
+                <ActionButton onClick={() => {
+                  setEditingStaffId(null)
+                  setStaffUsernameAuto(true)
+                  setStaffForm({ name: '', phone: '', role: 'reception', username: '', password: '' })
+                  setStaffFormOpen((open) => !open)
+                }}><Plus size={16} /> Xodim qo‘shish</ActionButton>
               </div>
+              {staffFormOpen && (
+                <form id="mini-staff-form" className="mt-4 grid gap-3 border-t border-[var(--mini-border)] pt-4" onSubmit={saveStaff}>
+                  <h3 className="font-semibold">{editingStaffId ? 'Xodim ma’lumotlarini tahrirlash' : 'Yangi xodim akkaunti'}</h3>
+                  <label className="mini-field"><span>Ism va familiya</span><input value={staffForm.name} onChange={(event) => setStaffForm((current) => ({ ...current, name: event.target.value, username: staffUsernameAuto ? loginBaseFromName(event.target.value) : current.username }))} required /></label>
+                  <label className="mini-field"><span>Telefon</span><input type="tel" value={staffForm.phone} onChange={(event) => setStaffForm({ ...staffForm, phone: event.target.value })} /></label>
+                  <label className="mini-field"><span>Rol</span><select value={staffForm.role} onChange={(event) => setStaffForm({ ...staffForm, role: event.target.value })}><option value="reception">Qabulxona</option><option value="teacher">O‘qituvchi</option></select></label>
+                  <label className="mini-field"><span>Login</span><input value={staffForm.username} onChange={(event) => { setStaffUsernameAuto(false); setStaffForm({ ...staffForm, username: event.target.value }) }} required /><small>Ism.familiya; band bo‘lsa avtomatik raqam qo‘shiladi.</small></label>
+                  <label className="mini-field"><span>{editingStaffId ? 'Yangi parol (ixtiyoriy)' : 'Parol (kamida 12 belgi)'}</span><input type="password" autoComplete="new-password" value={staffForm.password} onChange={(event) => setStaffForm({ ...staffForm, password: event.target.value })} minLength={staffForm.password ? 12 : undefined} required={!editingStaffId} /></label>
+                  <div className="flex flex-wrap gap-2"><ActionButton type="submit" disabled={busy}>{busy ? 'Saqlanmoqda…' : editingStaffId ? 'Xodimni saqlash' : 'Xodim qo‘shish'}</ActionButton><ActionButton className="mini-secondary" disabled={busy} onClick={() => { setStaffFormOpen(false); setEditingStaffId(null); setStaffUsernameAuto(true) }}>Bekor qilish</ActionButton></div>
+                </form>
+              )}
               <div className="mt-3 divide-y divide-[var(--mini-border)]">
                 {staffRows.map((item) => (
                   <div key={item.id} className="flex min-h-14 items-center justify-between gap-3 py-2">
@@ -1684,9 +1706,18 @@ export default function MainApp() {
                       <p className="truncate text-sm font-semibold">{item.name}</p>
                       <p className="text-xs text-[var(--mini-muted)]">{item.role === 'reception' ? 'Qabulxona' : 'O‘qituvchi'} · {item.username}</p>
                     </div>
-                    <span className={`mini-badge ${item.is_active ? 'mini-badge-success' : 'mini-badge-muted'}`}>
-                      {item.is_active ? 'Faol' : 'Faol emas'}
-                    </span>
+                    <div className="flex flex-wrap items-center justify-end gap-1">
+                      <span className={`mini-badge ${item.is_active ? 'mini-badge-success' : 'mini-badge-muted'}`}>
+                        {item.is_active ? 'Faol' : 'Faol emas'}
+                      </span>
+                      <ActionButton className="mini-secondary min-h-9 px-3 text-xs" disabled={busy} onClick={() => {
+                        setEditingStaffId(item.id)
+                        setStaffUsernameAuto(false)
+                        setStaffForm({ name: item.name, phone: item.phone || '', role: item.role, username: item.username, password: '' })
+                        setStaffFormOpen(true)
+                      }}>Tahrirlash / parol</ActionButton>
+                      <ActionButton className="mini-secondary min-h-9 px-3 text-xs" disabled={busy} onClick={() => requestStaffStatusChange(item)}>{item.is_active ? 'Faolsizlantirish' : 'Faollashtirish'}</ActionButton>
+                    </div>
                   </div>
                 ))}
                 {!staffRows.length && !loading && <p className="py-3 text-sm text-[var(--mini-muted)]">Xodimlar ro‘yxati bo‘sh.</p>}
@@ -2168,30 +2199,6 @@ export default function MainApp() {
                 </div>
               )}
             </Panel>
-            {canAccessEndpoint(role, 'staff:manage') && (
-              <Panel>
-                <h2 className="font-bold">Xodim akkauntlari</h2>
-                <form className="mt-4 grid gap-3" onSubmit={saveStaff}>
-                  <label className="mini-field"><span>Ism va familiya</span><input value={staffForm.name} onChange={(event) => setStaffForm((current) => ({ ...current, name: event.target.value, username: staffUsernameAuto ? loginBaseFromName(event.target.value) : current.username }))} required /></label>
-                  <label className="mini-field"><span>Telefon</span><input type="tel" value={staffForm.phone} onChange={(event) => setStaffForm({ ...staffForm, phone: event.target.value })} /></label>
-                  <label className="mini-field"><span>Rol</span><select value={staffForm.role} onChange={(event) => setStaffForm({ ...staffForm, role: event.target.value })}><option value="reception">Qabulxona</option><option value="teacher">O‘qituvchi</option></select></label>
-                  <label className="mini-field"><span>Login</span><input value={staffForm.username} onChange={(event) => { setStaffUsernameAuto(false); setStaffForm({ ...staffForm, username: event.target.value }) }} required /><small>Ism.familiya; band bo‘lsa avtomatik raqam qo‘shiladi.</small></label>
-                  <label className="mini-field"><span>{editingStaffId ? 'Yangi parol (ixtiyoriy)' : 'Parol (kamida 12 belgi)'}</span><input type="password" autoComplete="new-password" value={staffForm.password} onChange={(event) => setStaffForm({ ...staffForm, password: event.target.value })} minLength={staffForm.password ? 12 : undefined} required={!editingStaffId} /></label>
-                  <div className="flex flex-wrap gap-2"><ActionButton type="submit" disabled={busy}>{busy ? 'Saqlanmoqda…' : editingStaffId ? 'Xodimni saqlash' : 'Xodim qo‘shish'}</ActionButton>{editingStaffId && <ActionButton className="mini-secondary" disabled={busy} onClick={() => { setEditingStaffId(null); setStaffUsernameAuto(true); setStaffForm({ name: '', phone: '', role: 'reception', username: '', password: '' }) }}>Bekor qilish</ActionButton>}</div>
-                </form>
-                <div className="mt-3 divide-y divide-[var(--mini-border)]">
-                  {staffRows.map((item) => (
-                    <div key={item.id} className="flex flex-wrap items-center justify-between gap-2 py-3">
-                      <div><p className="text-sm font-semibold">{item.name}</p><p className="text-xs text-[var(--mini-muted)]">@{item.username} · {item.role === 'teacher' ? 'O‘qituvchi' : 'Qabulxona'} · {item.phone || 'Telefon yo‘q'}</p></div>
-                      <div className="flex flex-wrap gap-1">
-                        <ActionButton className="mini-secondary min-h-9 px-3 text-xs" disabled={busy} onClick={() => { setEditingStaffId(item.id); setStaffUsernameAuto(false); setStaffForm({ name: item.name, phone: item.phone || '', role: item.role, username: item.username, password: '' }) }}>Tahrirlash / parolni tiklash</ActionButton>
-                        <ActionButton className="mini-secondary min-h-9 px-3 text-xs" disabled={busy} onClick={() => requestStaffStatusChange(item)}>{item.is_active ? 'Faolsizlantirish' : 'Faollashtirish'}</ActionButton>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </Panel>
-            )}
             <Panel>
               <h2 className="font-bold">O‘qituvchilar</h2>
               {canAccessEndpoint(role, 'staff:manage') && (

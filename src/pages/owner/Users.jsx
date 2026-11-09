@@ -200,6 +200,8 @@ export default function OwnerUsers() {
   return (
     <PageEnter>
       <PageHeader
+        title="Xodimlar"
+        subtitle="Qabulxona va o‘qituvchi akkauntlarini boshqarish"
         actions={
           <GlowButton
             className="btn-primary"
@@ -211,7 +213,7 @@ export default function OwnerUsers() {
               setReceptionOpen(true)
             }}
           >
-          <Plus size={16} /> Xodim akkaunti
+          <Plus size={16} /> Xodim qo‘shish
           </GlowButton>
         }
       />

@@ -4654,8 +4654,13 @@ html.nav-drawer-open body::-webkit-scrollbar {
 
   .sidebar.sidebar-open {
     transform: translateX(0);
+    z-index: 500;
     box-shadow: var(--glass-shadow-lg);
     background: var(--glass-bg-strong) !important;
+  }
+
+  html.nav-drawer-open .mobile-bottom-nav {
+    display: none !important;
   }
 
   /* Mobil menyuda skroll bo‘lsa ham noqulay yupqa scrollbar ko‘rinmasin */

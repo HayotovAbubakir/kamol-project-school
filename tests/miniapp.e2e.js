@@ -82,6 +82,8 @@ async function installMocks(page, role, scheme = 'light', { signedIn = true, sch
   }
   let createdStudent = null
   let createdHomework = null
+  let createdStaff = null
+  const staffRows = []
 
   await page.emulateMedia({ colorScheme: scheme })
   await page.addInitScript(({ sessionProfile, hasSession, theme }) => {
@@ -249,7 +251,13 @@ async function installMocks(page, role, scheme = 'light', { signedIn = true, sch
     if (pathname === '/api/homework/review') return json({ data: { submissions: [], not_submitted: [] } })
     if (pathname.startsWith('/api/homework/history')) return json({ data: { events: [], submissions: [] } })
     if (pathname === '/api/questions') return json({ data: [] })
-    if (pathname === '/api/staff') return json({ data: [] })
+    if (pathname === '/api/staff' && request.method() === 'POST') {
+      const body = request.postDataJSON()
+      createdStaff = { ...body, id: 'staff-created', is_active: true }
+      staffRows.push(createdStaff)
+      return json({ data: createdStaff }, 201)
+    }
+    if (pathname === '/api/staff') return json({ data: staffRows })
     if (pathname === '/api/finance/summary') return json({ income: 12_000_000, salary_cost: 4_300_000, expense_cost: 1_100_000, net: 6_600_000 })
     if (pathname === '/api/telegram/bot-info') return json({ bot_username: 'kamol_project_school_bot' })
     return json({ data: [] })
@@ -259,6 +267,7 @@ async function installMocks(page, role, scheme = 'light', { signedIn = true, sch
     profile,
     getCreatedStudent: () => createdStudent,
     getCreatedHomework: () => createdHomework,
+    getCreatedStaff: () => createdStaff,
   }
 }
 
@@ -436,6 +445,54 @@ test.describe('Mini App role flows', () => {
       await assertNoHorizontalOverflow(page)
     })
   }
+
+  test('owner creates a reception account directly from the Xodimlar tab', async ({ page }) => {
+    const fixtures = await openMiniApp(page, 'owner')
+    await page.getByRole('navigation', { name: 'Asosiy menyu' }).getByRole('button', { name: 'Xodimlar', exact: true }).click()
+    await page.getByRole('button', { name: 'Xodim qo‘shish' }).click()
+    await page.getByLabel('Ism va familiya').fill('Malika Qodirova')
+    await page.getByLabel('Telefon').fill('+998901112244')
+    await page.locator('#mini-staff-form select').selectOption('reception')
+    await page.getByLabel('Login').fill('malika.qodirova')
+    await page.getByLabel('Parol (kamida 12 belgi)').fill('MalikaStrong2026')
+    await page.getByRole('button', { name: 'Xodim qo‘shish' }).last().click()
+
+    await expect(page.getByText('Xodim akkaunti saqlandi.')).toBeVisible()
+    await expect(page.getByText('Qabulxona · malika.qodirova')).toBeVisible()
+    expect(fixtures.getCreatedStaff()).toMatchObject({
+      name: 'Malika Qodirova',
+      role: 'reception',
+      username: 'malika.qodirova',
+    })
+  })
+
+  test('website owner adds a reception account and the open menu covers the bottom tabs', async ({ page }) => {
+    const fixtures = await installMocks(page, 'owner')
+    await page.setViewportSize({ width: 390, height: 844 })
+    await page.goto('/owner/settings/staff')
+
+    await expect(page.getByRole('heading', { name: 'Xodimlar' })).toBeVisible()
+    await page.getByRole('button', { name: 'Xodim qo‘shish' }).click()
+    const form = page.locator('#reception-form')
+    await form.locator('input').nth(0).fill('Dilnoza Rahimova')
+    await form.locator('input').nth(1).fill('+998901112255')
+    await form.locator('select').selectOption('reception')
+    await form.locator('input').nth(2).fill('dilnoza.rahimova')
+    await form.locator('input[type="password"]').fill('DilnozaStrong2026')
+    await page.getByRole('button', { name: 'Saqlash' }).click()
+
+    await expect(page.getByText('@dilnoza.rahimova')).toBeVisible()
+    expect(fixtures.getCreatedStaff()).toMatchObject({
+      name: 'Dilnoza Rahimova',
+      role: 'reception',
+      username: 'dilnoza.rahimova',
+    })
+
+    await page.locator('.topbar-hamburger-mobile').click()
+    await expect(page.locator('.sidebar.sidebar-open')).toBeVisible()
+    await expect.poll(() => page.locator('.mobile-bottom-nav').evaluate((nav) => getComputedStyle(nav).display)).toBe('none')
+    expect(await page.locator('.sidebar.sidebar-open').evaluate((sidebar) => Number(getComputedStyle(sidebar).zIndex))).toBeGreaterThan(400)
+  })
 
   test('reception confirms before unlinking a student Telegram account', async ({ page }) => {
     await openMiniApp(page, 'reception')
