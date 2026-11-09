@@ -17,25 +17,45 @@ function clearLegacyAuthStorage() {
 
 clearLegacyAuthStorage()
 
-function readSession() {
+function authStores() {
+  if (typeof window === 'undefined') return []
+  const stores = []
   try {
-    const stored = typeof window === 'undefined' ? null : window.sessionStorage.getItem(SESSION_KEY)
-    return stored ? JSON.parse(stored) : memoryStorage.get(SESSION_KEY) || null
-  } catch {
-    return memoryStorage.get(SESSION_KEY) || null
+    if (window.localStorage) stores.push(window.localStorage)
+  } catch { /* ignore */ }
+  try {
+    if (window.sessionStorage) stores.push(window.sessionStorage)
+  } catch { /* ignore */ }
+  return stores
+}
+
+function readSession() {
+  const stores = authStores()
+  for (const store of stores) {
+    try {
+      const stored = store.getItem(SESSION_KEY)
+      if (!stored) continue
+      const session = JSON.parse(stored)
+      // Session used to live in sessionStorage, which Telegram clears on close.
+      if (stores[0] === window.localStorage && store === window.sessionStorage) {
+        try { window.localStorage.setItem(SESSION_KEY, stored) } catch { /* ignore */ }
+      }
+      return session
+    } catch { /* ignore */ }
   }
+  return memoryStorage.get(SESSION_KEY) || null
 }
 
 function writeSession(session) {
   if (session) memoryStorage.set(SESSION_KEY, session)
   else memoryStorage.delete(SESSION_KEY)
-  try {
-    if (typeof window !== 'undefined') {
-      if (session) window.sessionStorage.setItem(SESSION_KEY, JSON.stringify(session))
-      else window.sessionStorage.removeItem(SESSION_KEY)
+  for (const store of authStores()) {
+    try {
+      if (session) store.setItem(SESSION_KEY, JSON.stringify(session))
+      else store.removeItem(SESSION_KEY)
+    } catch {
+      if (!session) memoryStorage.delete(SESSION_KEY)
     }
-  } catch {
-    if (!session) memoryStorage.delete(SESSION_KEY)
   }
 }
 
