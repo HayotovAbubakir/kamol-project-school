@@ -323,8 +323,19 @@ test.describe('Mini App screens and visual overflow', () => {
             ...extra.map((id) => [screenLabels[id], id]),
           ]
 
-          await page.getByRole('button', { name: 'Ko‘proq menyu' }).click()
+          const moreButton = page.getByRole('button', { name: 'Ko‘proq menyu' })
+          await moreButton.click()
+          const moreDialog = page.getByRole('dialog', { name: 'Ko‘proq bo‘limlar' })
+          await expect(moreDialog).toBeVisible()
+          await expect(moreDialog).toHaveAttribute('aria-modal', 'true')
+          await expect(page.locator('.mini-app-content')).toHaveJSProperty('inert', true)
+          await expect(page.locator('.mini-more-overlay')).toHaveCSS('background-color', 'rgba(3, 8, 16, 0.76)')
           await assertNoHorizontalOverflow(page)
+          await page.keyboard.press('Escape')
+          await expect(moreDialog).toBeHidden()
+          await expect(page.locator('.mini-app-content')).toHaveJSProperty('inert', false)
+          await expect(moreButton).toBeFocused()
+          await moreButton.click()
           await page.screenshot({
             path: testInfo.outputPath(`${role}-${viewport.width}x${viewport.height}-${scheme}-more-menu.png`),
             fullPage: true,

@@ -2,7 +2,7 @@
 
 ## Yagona manba
 
-Rollar va ruxsatlarning yagona matritsasi [`shared/role-permissions.js`](./shared/role-permissions.js). Worker API, website `AuthGuard`, Mini App navigatsiyasi va `owner/settings/roles` sahifasi shu matritsadan foydalanadi. O‘qituvchining guruh darajasidagi scope’i Worker’da qo‘shimcha tekshiriladi.
+Rollar va ruxsatlarning yagona matritsasi [`shared/role-permissions.js`](./shared/role-permissions.js). Worker API, website `AuthGuard` va Mini App navigatsiyasi shu matritsadan foydalanadi. O‘qituvchining guruh darajasidagi scope’i Worker’da qo‘shimcha tekshiriladi.
 
 ## Rollar
 

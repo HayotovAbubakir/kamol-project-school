@@ -7,7 +7,6 @@ import {
   GraduationCap,
   HardHat,
   Home,
-  KeyRound,
   Lock,
   LogOut,
   Menu,
@@ -64,7 +63,6 @@ function buildNav(base, { ownerAccount = false } = {}) {
           ? [{ to: `${base}/settings/account`, labelKey: 'nav.account', icon: Lock }]
           : []),
         { to: `${base}/settings/staff`, labelKey: 'nav.staff', icon: UserCog },
-        { to: `${base}/settings/roles`, labelKey: 'nav.roles', icon: KeyRound },
       ],
     },
   ]
@@ -119,17 +117,13 @@ const BOTTOM_NAV = {
     { to: '/owner/groups', labelKey: 'nav.groups', icon: Users },
     { to: '/owner/students', labelKey: 'nav.students', icon: GraduationCap },
     { to: '/owner/finance', labelKey: 'nav.financeSummary', icon: ChartColumn },
-    { to: '/owner/notifications', labelKey: 'nav.notifications', icon: Bell },
     { to: '/owner/questions', labelKey: 'nav.questions', icon: MessageCircle },
   ],
   reception: [
     { to: '/reception', labelKey: 'nav.home', end: true, icon: Home },
     { to: '/reception/groups', labelKey: 'nav.groups', icon: Users },
     { to: '/reception/students', labelKey: 'nav.students', icon: GraduationCap },
-    { to: '/reception/teachers', labelKey: 'nav.teachers', icon: HardHat },
-    { to: '/reception/schedule', labelKey: 'nav.schedule', icon: CalendarDays },
     { to: '/reception/attendance', labelKey: 'nav.attendance', icon: ClipboardCheck },
-    { to: '/reception/payments/debtors', labelKey: 'nav.debtors', icon: UserRound },
     { to: '/reception/questions', labelKey: 'nav.questions', icon: MessageCircle },
   ],
 }
@@ -138,7 +132,6 @@ const PAGE_TITLES = [
   { match: /\/settings\/account/, titleKey: 'nav.account' },
   { match: /\/settings\/fon/, titleKey: 'nav.appearance' },
   { match: /\/settings\/staff/, titleKey: 'nav.staff' },
-  { match: /\/settings\/roles/, titleKey: 'nav.roles' },
   { match: /\/attendance\/absent-today/, titleKey: 'owner.absentToday.title' },
   { match: /\/teacher\/attendance/, titleKey: 'nav.attendance' },
   { match: /\/teacher\/groups/, titleKey: 'nav.myGroups' },

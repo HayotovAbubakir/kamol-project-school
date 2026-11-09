@@ -128,16 +128,16 @@
   --sidebar-chip: rgba(255, 255, 255, 0.1);
   --sidebar-logout-bg: rgba(255, 255, 255, 0.1);
   --sidebar-logout-border: rgba(255, 255, 255, 0.55);
-  --glass-bg: rgba(8, 10, 12, 0.22);
-  --glass-bg-strong: rgba(8, 10, 12, 0.3);
+  --glass-bg: rgba(10, 14, 16, 0.82);
+  --glass-bg-strong: rgba(10, 14, 16, 0.92);
   --glass-w: 1px;
   --glass-hi: rgba(255, 255, 255, 0.34);
   --glass-mid: rgba(255, 255, 255, 0.16);
   --glass-lo: rgba(255, 255, 255, 0.07);
   --glass-border: rgba(255, 255, 255, 0.22);
   --glass-border-subtle: rgba(255, 255, 255, 0.12);
-  --glass-blur: blur(2px);
-  --glass-saturate: 1.02;
+  --glass-blur: blur(22px);
+  --glass-saturate: 1.15;
   --glass-shadow:
     inset 1px 1px 0 rgba(255, 255, 255, 0.22),
     inset -1px -1px 0 rgba(255, 255, 255, 0.04),
@@ -262,8 +262,9 @@ html[data-wallpaper="video"] .sidebar {
 }
 
 html[data-wallpaper="video"] .glass-pane,
-html[data-wallpaper="video"] .dark .glass-pane {
-  background: rgba(12, 14, 16, 0.55) !important;
+html[data-wallpaper="video"] .dark .glass-pane,
+html[data-wallpaper="video"] .sidebar.sidebar-open {
+  background: rgba(12, 14, 16, 0.96) !important;
   box-shadow:
     inset 1px 1px 0 rgba(255, 255, 255, 0.2),
     0 10px 28px rgba(0, 0, 0, 0.28) !important;
@@ -271,7 +272,7 @@ html[data-wallpaper="video"] .dark .glass-pane {
 
 html.light[data-wallpaper="video"] .glass-pane,
 html.light[data-wallpaper="video"] .light .glass-pane {
-  background: rgba(255, 255, 255, 0.5) !important;
+  background: rgba(255, 255, 255, 0.94) !important;
   border-color: rgba(255, 255, 255, 0.7) !important;
   box-shadow:
     inset 1px 1px 0 rgba(255, 255, 255, 0.78),
@@ -289,7 +290,7 @@ html[data-wallpaper="video"].dark .card:not(.glass-pane),
 html[data-wallpaper="video"].dark .master-list-shell,
 html[data-wallpaper="video"].dark .master-detail-panel,
 html[data-wallpaper="video"].dark .expenses-table-wrap {
-  background: rgba(12, 14, 16, 0.55) !important;
+  background: rgba(12, 14, 16, 0.9) !important;
   box-shadow:
     inset 1px 1px 0 rgba(255, 255, 255, 0.16),
     0 10px 28px rgba(0, 0, 0, 0.28) !important;
@@ -300,7 +301,7 @@ html.light[data-wallpaper="video"] .card:not(.glass-pane),
 html.light[data-wallpaper="video"] .master-list-shell,
 html.light[data-wallpaper="video"] .master-detail-panel,
 html.light[data-wallpaper="video"] .expenses-table-wrap {
-  background: rgba(255, 255, 255, 0.5) !important;
+  background: rgba(255, 255, 255, 0.94) !important;
   border-color: rgba(255, 255, 255, 0.68) !important;
   box-shadow:
     inset 1px 1px 0 rgba(255, 255, 255, 0.72),
@@ -3523,15 +3524,16 @@ html.light[data-wallpaper="video"] .btn-outline {
   padding: 6px;
   border-radius: 14px;
   border: 1px solid var(--glass-border);
-  background: color-mix(in srgb, var(--panel, #12141a) 94%, transparent);
-  backdrop-filter: blur(18px) saturate(1.2);
-  -webkit-backdrop-filter: blur(18px) saturate(1.2);
-  box-shadow: var(--glass-shadow-lg, 0 18px 40px rgba(0, 0, 0, 0.35));
+  background: #161b22;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.45);
   scrollbar-width: thin;
+  isolation: isolate;
 }
 
 .light .ui-select-menu {
-  background: color-mix(in srgb, #ffffff 92%, transparent);
+  background: #ffffff;
 }
 
 .ui-select-option {
@@ -4672,6 +4674,7 @@ html.nav-drawer-open body::-webkit-scrollbar {
   .sidebar.sidebar-open {
     transform: translateX(0);
     box-shadow: var(--glass-shadow-lg);
+    background: var(--glass-bg-strong) !important;
   }
 
   /* Mobil menyuda skroll bo‘lsa ham noqulay yupqa scrollbar ko‘rinmasin */
@@ -4842,15 +4845,15 @@ html.nav-drawer-open body::-webkit-scrollbar {
     margin: 0;
     border: 0;
     border-top: 1px solid var(--glass-border-subtle);
-    background: color-mix(in srgb, var(--panel, #12141a) 97%, transparent);
-    backdrop-filter: blur(18px) saturate(1.15);
-    -webkit-backdrop-filter: blur(18px) saturate(1.15);
+    background: #12161c;
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
     box-shadow: 0 -10px 30px rgba(0, 0, 0, 0.35);
     pointer-events: auto !important;
   }
 
   .light .mobile-bottom-nav {
-    background: color-mix(in srgb, #ffffff 96%, transparent);
+    background: #ffffff;
     box-shadow: 0 -8px 24px rgba(24, 24, 27, 0.1);
   }
 

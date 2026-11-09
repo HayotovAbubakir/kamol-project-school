@@ -18,7 +18,6 @@ const OwnerDebtors = lazy(() => import('./pages/owner/Debtors'))
 const OwnerFinance = lazy(() => import('./pages/owner/Finance'))
 const OwnerNotifications = lazy(() => import('./pages/owner/Notifications'))
 const OwnerPaid = lazy(() => import('./pages/owner/Paid'))
-const OwnerRoles = lazy(() => import('./pages/owner/Roles'))
 const OwnerSchedule = lazy(() => import('./pages/owner/Schedule'))
 const OwnerUsers = lazy(() => import('./pages/owner/Users'))
 const Questions = lazy(() => import('./pages/Questions'))
@@ -64,7 +63,7 @@ export default function App() {
               <Route path="settings/fon" element={<AppearanceSettings />} />
               <Route path="settings/account" element={<OwnerAccountSettings />} />
               <Route path="settings/staff" element={<OwnerUsers />} />
-              <Route path="settings/roles" element={<OwnerRoles />} />
+              <Route path="settings/roles" element={<Navigate to="/owner" replace />} />
               <Route path="users" element={<Navigate to="/owner/settings/staff" replace />} />
               <Route path="expenses" element={<Navigate to="/owner/finance" replace />} />
               <Route path="admins" element={<Navigate to="/owner/settings/staff" replace />} />

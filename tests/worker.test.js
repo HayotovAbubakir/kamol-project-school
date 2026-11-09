@@ -599,6 +599,27 @@ describe('schedule change API', () => {
 })
 
 describe('D1 worker routes and authentication', () => {
+  it('does not expose disabled staff as active Telegram bot profiles', async () => {
+    const owner = await loginOwner()
+    const telegramId = 987654329
+    const previousProfile = await env.DB.prepare('SELECT telegram_id FROM profiles WHERE id = ?')
+      .bind(owner.user.id).first()
+    await env.DB.prepare('UPDATE profiles SET telegram_id = ? WHERE id = ?').bind(telegramId, owner.user.id).run()
+    const profileRequest = () => request(`/api/bot/profile?telegram_id=${telegramId}`, {
+      headers: { 'X-Bot-Secret': env.BOT_API_SECRET },
+    })
+
+    expect((await (await profileRequest()).json()).data).toMatchObject({ role: 'owner' })
+    await env.DB.prepare('UPDATE accounts SET is_active = 0 WHERE id = ?').bind(owner.user.id).run()
+    try {
+      expect((await (await profileRequest()).json()).data).toBeNull()
+    } finally {
+      await env.DB.prepare('UPDATE accounts SET is_active = 1 WHERE id = ?').bind(owner.user.id).run()
+      await env.DB.prepare('UPDATE profiles SET telegram_id = ? WHERE id = ?')
+        .bind(previousProfile?.telegram_id || null, owner.user.id).run()
+    }
+  })
+
   it('enforces representative endpoint groups for every role and unauthenticated callers', async () => {
     const ownerSession = await loginOwner()
     const ownerToken = ownerSession.access_token

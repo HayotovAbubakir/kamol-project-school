@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { PageEnter } from '../components/motion/PageMotion'
 import { PageHeader, StatusBadge } from '../components/ui'
+import Select from '../components/Select'
 import { useAuth } from '../context/AuthContext'
 import { cloudflare } from '../lib/cloudflare'
 
@@ -29,8 +30,10 @@ export default function Questions() {
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
   const [expanded, setExpanded] = useState(null)
+  const loadVersion = useRef(0)
 
   const load = useCallback(async () => {
+    const version = ++loadVersion.current
     setLoading(true)
     setError('')
     try {
@@ -40,16 +43,17 @@ export default function Questions() {
       const params = new URLSearchParams()
       if (status) params.set('status', status)
       if (search.trim()) params.set('search', search.trim())
-      setTickets(await questionRequest(`/api/questions?${params}`, token))
+      const nextTickets = await questionRequest(`/api/questions?${params}`, token)
+      if (version === loadVersion.current) setTickets(nextTickets)
     } catch (loadError) {
-      setError(loadError.message || 'Savollarni yuklab bo‘lmadi.')
+      if (version === loadVersion.current) setError(loadError.message || 'Savollarni yuklab bo‘lmadi.')
     } finally {
-      setLoading(false)
+      if (version === loadVersion.current) setLoading(false)
     }
   }, [status, search])
 
   useEffect(() => {
-    const timer = window.setTimeout(() => load(), 0)
+    const timer = window.setTimeout(() => load(), 250)
     return () => window.clearTimeout(timer)
   }, [load])
 
@@ -110,33 +114,76 @@ export default function Questions() {
   }
 
   const unreadTotal = tickets.reduce((sum, ticket) => sum + Number(ticket.unread_count || 0), 0)
+  const formatDate = (value) => new Intl.DateTimeFormat('uz-UZ', {
+    dateStyle: 'short',
+    timeStyle: 'short',
+    timeZone: 'Asia/Tashkent',
+  }).format(new Date(value))
+  const hasFilters = Boolean(status || search.trim())
+
   return (
     <PageEnter>
-      <PageHeader title="Savollar inboxi" subtitle="O‘quvchilar bilan yozishmalar va javoblar tarixi" />
-      {error && <div className="alert alert-error" role="alert">{error}</div>}
-      {notice && <div className="alert alert-success" role="status">{notice}</div>}
+      <PageHeader title="Savollar" subtitle="O‘quvchilar yuborgan savollar va yozishmalar" />
+      {error && (
+        <div className="alert alert-error flex flex-wrap items-center justify-between gap-3" role="alert">
+          <span>{error}</span>
+          <button type="button" className="btn btn-outline btn-sm" onClick={load} disabled={loading}>
+            {loading ? 'Yuklanmoqda…' : 'Qayta urinish'}
+          </button>
+        </div>
+      )}
+      {notice && <div className="alert alert-success" role="status" aria-live="polite">{notice}</div>}
       <div className="card mb-4 grid grid-cols-1 gap-3 p-4 sm:grid-cols-[1fr_2fr_auto]">
         <label className="field">
           <span>Holati</span>
-          <select className="input" value={status} onChange={(event) => setStatus(event.target.value)}>
-            <option value="">Barchasi</option><option value="open">Ochiq</option><option value="answered">Javob berilgan</option><option value="closed">Yopilgan</option>
-          </select>
+          <Select
+            aria-label="Holati"
+            value={status}
+            onChange={(event) => setStatus(event.target.value)}
+            options={[
+              { value: '', label: 'Barchasi' },
+              { value: 'open', label: 'Ochiq' },
+              { value: 'answered', label: 'Javob berilgan' },
+              { value: 'closed', label: 'Yopilgan' },
+            ]}
+          />
         </label>
         <label className="field">
           <span>Qidirish</span>
-          <input className="input" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="O‘quvchi yoki xabar matni" />
+          <input
+            className="input"
+            type="search"
+            name="savollar-qidiruv"
+            autoComplete="off"
+            value={search}
+            onChange={(event) => setSearch(event.target.value)}
+            placeholder="O‘quvchi yoki xabar matni…"
+          />
         </label>
         <div className="self-end text-sm text-muted">O‘qilmagan: <strong>{unreadTotal}</strong></div>
       </div>
       {loading ? <div className="card p-6 text-muted">Savollar yuklanmoqda…</div>
-        : !tickets.length ? <div className="card p-6 text-muted">Bu filtrda savol topilmadi.</div>
+        : !tickets.length ? (
+          <div className="card grid gap-2 p-6 text-center">
+            <h2 className="font-semibold">{hasFilters ? 'Bu filtrga mos savol topilmadi' : 'Hozircha savollar yo‘q'}</h2>
+            <p className="text-sm text-muted">
+              {hasFilters ? 'Boshqa so‘z bilan qidiring yoki filtrlarni tozalang.' : 'O‘quvchilar yuborgan savollar shu yerda ko‘rinadi.'}
+            </p>
+            {hasFilters && (
+              <button type="button" className="btn btn-outline mx-auto mt-2" onClick={() => {
+                setStatus('')
+                setSearch('')
+              }}>Filtrlarni tozalash</button>
+            )}
+          </div>
+        )
           : <div className="grid gap-3">
             {tickets.map((ticket) => (
               <section key={ticket.id} className="card p-4">
                 <button type="button" className="flex w-full flex-wrap items-center justify-between gap-3 text-left" onClick={() => setExpanded(expanded === ticket.id ? null : ticket.id)}>
                   <span className="min-w-0">
                     <strong className="block truncate">{ticket.student_name}</strong>
-                    <span className="text-sm text-muted">{new Date(ticket.last_message_at).toLocaleString('uz-UZ')}</span>
+                    <span className="text-sm text-muted">{formatDate(ticket.last_message_at)}</span>
                   </span>
                   <span className="flex items-center gap-2">
                     {Number(ticket.unread_count) > 0 && <StatusBadge tone="warning">{ticket.unread_count} yangi</StatusBadge>}
@@ -149,7 +196,7 @@ export default function Questions() {
                   <div className="mt-4 grid gap-3 border-t border-[var(--border)] pt-3">
                     {ticket.messages?.map((message) => (
                       <article key={message.id} className="rounded-xl bg-[var(--surface-muted)] p-3">
-                        <p className="text-xs text-muted">{message.actor_role === 'student' ? 'O‘quvchi' : message.actor_role === 'teacher' ? 'O‘qituvchi' : 'Qabulxona'} · {new Date(message.created_at).toLocaleString('uz-UZ')}</p>
+                        <p className="text-xs text-muted">{message.actor_role === 'student' ? 'O‘quvchi' : message.actor_role === 'teacher' ? 'O‘qituvchi' : 'Qabulxona'} · {formatDate(message.created_at)}</p>
                         {message.body && <p className="mt-1 whitespace-pre-wrap break-words text-sm">{message.body}</p>}
                         {message.file_url && <a className="btn btn-outline btn-sm mt-2" href={message.file_url} onClick={(event) => downloadAttachment(event, message.file_url)}>Ilovani yuklab olish</a>}
                       </article>

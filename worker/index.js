@@ -831,7 +831,7 @@ export async function expireHomeworkDrafts(env) {
           env.DB.prepare('SELECT chat_id FROM telegram_links WHERE student_id = ?').bind(submission.student_id).all(),
           env.DB.prepare('SELECT title FROM homework WHERE id = ?').bind(submission.homework_id).first(),
         ])
-        const bot = getWorkerBot(env, env.TELEGRAM_WEBAPP_URL ? new URL(env.TELEGRAM_WEBAPP_URL).origin : 'https://localhost')
+        const bot = await getWorkerBot(env, env.TELEGRAM_WEBAPP_URL ? new URL(env.TELEGRAM_WEBAPP_URL).origin : 'https://localhost')
         for (const { chat_id: chatId } of chats.results || []) {
           await bot.api.sendMessage(chatId,
             `“${homework?.title || 'Uy vazifasi'}” uchun draft 24 soat ichida yuborilmagani sababli tugadi. Vazifa hali ochiq bo‘lsa, Mini App’dan qayta boshlang.`)
@@ -2279,7 +2279,7 @@ async function notifyTeacherOfSubmission(env, submission, submittedAt) {
     const fileRows = files.results || []
     const proof = fileRows.find((file) => file.kind === 'voice' || file.kind === 'video_note')
     const attachmentRows = fileRows.filter((file) => file.kind === 'attachment')
-    const bot = getWorkerBot(env, env.TELEGRAM_WEBAPP_URL ? new URL(env.TELEGRAM_WEBAPP_URL).origin : 'https://localhost')
+    const bot = await getWorkerBot(env, env.TELEGRAM_WEBAPP_URL ? new URL(env.TELEGRAM_WEBAPP_URL).origin : 'https://localhost')
     const appUrl = new URL(env.TELEGRAM_WEBAPP_URL || 'https://localhost/miniapp.html')
     appUrl.searchParams.set('review', submission.id)
     const text = buildHomeworkNotificationText({
@@ -2577,7 +2577,7 @@ async function notifyQuestionReceivers(env, origin, studentId, text) {
   if ((recipients.results || []).length && env.TELEGRAM_BOT_TOKEN) {
     try {
       const student = await env.DB.prepare('SELECT name FROM students WHERE id = ?').bind(studentId).first()
-      const bot = getWorkerBot(env, origin)
+      const bot = await getWorkerBot(env, origin)
       for (const recipient of recipients.results) {
         await bot.api.sendMessage(recipient.telegram_id,
           `Yangi savol keldi.\nO‘quvchi: ${student?.name || 'O‘quvchi'}\nMatn: ${text.slice(0, 1000)}`)
@@ -2759,7 +2759,8 @@ async function handleBot(request, env, pathname) {
   }
   if (pathname === '/api/bot/profile') {
     const telegramId = Number(new URL(request.url).searchParams.get('telegram_id'))
-    const profile = await env.DB.prepare('SELECT name, role FROM profiles WHERE telegram_id = ?')
+    const profile = await env.DB.prepare(`SELECT p.name, p.role FROM profiles p
+      JOIN accounts a ON a.id = p.id WHERE p.telegram_id = ? AND a.is_active = 1`)
       .bind(telegramId).first()
     return json({ data: profile || null })
   }

@@ -316,7 +316,6 @@ export default function MainApp() {
   const [studentPage, setStudentPage] = useState(0)
   const [paymentSearch, setPaymentSearch] = useState('')
   const [paymentPage, setPaymentPage] = useState(0)
-  const [moreOpen, setMoreOpen] = useState(false)
   const [keyboardOpen, setKeyboardOpen] = useState(false)
   const [confirmDialog, setConfirmDialog] = useState(null)
   const [authLoading, setAuthLoading] = useState(true)
@@ -355,6 +354,7 @@ export default function MainApp() {
   const [scheduleNotifications, setScheduleNotifications] = useState([])
   const [readScheduleNotificationIds, setReadScheduleNotificationIds] = useState([])
   const [scheduleChangeGroup, setScheduleChangeGroup] = useState(null)
+  const [moreOpen, setMoreOpen] = useState(false)
   const [questionStatus, setQuestionStatus] = useState('')
   const [questionSearch, setQuestionSearch] = useState('')
   const [questionText, setQuestionText] = useState('')
@@ -363,6 +363,9 @@ export default function MainApp() {
   const [copied, setCopied] = useState(false)
   const touchStartY = useRef(null)
   const pageHistory = useRef([])
+  const wasMoreOpen = useRef(false)
+  const moreMenuRef = useRef(null)
+  const moreButtonRef = useRef(null)
   const reviewLinkHandled = useRef(false)
   const mediaRecorder = useRef(null)
   const recordingStream = useRef(null)
@@ -433,10 +436,13 @@ export default function MainApp() {
       : questionTickets.reduce((sum, ticket) => sum + Number(ticket.unread_count || 0), 0)
   const unreadScheduleCount = scheduleNotifications.filter((item) => !readScheduleNotificationIds.includes(item.id)).length
   const goBack = useCallback(() => {
+    if (moreOpen) {
+      setMoreOpen(false)
+      return
+    }
     const previousPage = pageHistory.current.pop()
     setPage(previousPage || (page === 'detail' ? 'homework' : 'dashboard'))
-    setMoreOpen(false)
-  }, [page])
+  }, [moreOpen, page])
 
   const refresh = useCallback(async (profile) => {
     if (!profile) return
@@ -495,6 +501,39 @@ export default function MainApp() {
       setLoading(false)
     }
   }, [])
+
+  useEffect(() => {
+    if (!moreOpen) {
+      if (wasMoreOpen.current) moreButtonRef.current?.focus()
+      wasMoreOpen.current = false
+      return undefined
+    }
+    wasMoreOpen.current = true
+    const menu = moreMenuRef.current
+    const focusable = () => [...(menu?.querySelectorAll('button:not(:disabled)') || [])]
+    focusable()[0]?.focus()
+    const onKeyDown = (event) => {
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        setMoreOpen(false)
+        return
+      }
+      if (event.key !== 'Tab') return
+      const items = focusable()
+      if (!items.length) return
+      const first = items[0]
+      const last = items[items.length - 1]
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault()
+        last.focus()
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault()
+        first.focus()
+      }
+    }
+    document.addEventListener('keydown', onKeyDown)
+    return () => document.removeEventListener('keydown', onKeyDown)
+  }, [moreOpen])
 
   useEffect(() => {
     const timer = window.setInterval(() => setNow(Date.now()), 60_000)
@@ -1407,7 +1446,7 @@ export default function MainApp() {
         if (start !== null && event.changedTouches[0].clientY - start > 90 && content?.scrollTop === 0 && user) refresh(user)
       }}
     >
-      <div className="mini-app-content mx-auto w-full max-w-xl">
+      <div className="mini-app-content mx-auto w-full max-w-xl" inert={moreOpen}>
         <header className="mini-app-bar flex min-h-14 items-center justify-between gap-3">
           <div className="flex min-w-0 items-center gap-3">
             {page !== 'dashboard' && (
@@ -1431,7 +1470,7 @@ export default function MainApp() {
               <Bell size={18} />
               {notificationCount + unreadScheduleCount > 0 && <span className="mini-notification-badge">{notificationCount + unreadScheduleCount > 9 ? '9+' : notificationCount + unreadScheduleCount}</span>}
             </button>
-            <button type="button" className="mini-icon-button" onClick={() => setMoreOpen((open) => !open)} aria-label="Ko‘proq menyu" aria-expanded={moreOpen}>
+            <button ref={moreButtonRef} type="button" className="mini-icon-button" onClick={() => setMoreOpen((open) => !open)} aria-label="Ko‘proq menyu" aria-expanded={moreOpen}>
               <Ellipsis size={19} />
             </button>
             <button type="button" className="mini-icon-button" onClick={() => refresh(user)} aria-label="Yangilash" title="Yangilash" disabled={loading}>
@@ -1439,25 +1478,6 @@ export default function MainApp() {
             </button>
           </div>
         </header>
-
-        {moreOpen && (
-          <div className="mini-more-menu" role="dialog" aria-label="Ko‘proq bo‘limlar">
-            <div className="flex items-center justify-between">
-              <h2 className="font-bold">Ko‘proq</h2>
-              <button className="mini-icon-button" type="button" aria-label="Menyuni yopish" onClick={() => setMoreOpen(false)}>×</button>
-            </div>
-            <div className="mt-2 grid gap-1">
-              {morePages.map((id) => (
-                <button key={id} type="button" className="mini-more-item" onClick={() => navTo(id)}>
-                  <span>{pageTitles[id]}</span><ArrowLeft className="rotate-180" size={16} />
-                </button>
-              ))}
-              <button type="button" className="mini-more-item mini-more-logout" onClick={logout}>
-                <span>Chiqish</span><LogOut size={16} />
-              </button>
-            </div>
-          </div>
-        )}
 
         {error && (
           <div className="mt-4">
@@ -2309,7 +2329,37 @@ export default function MainApp() {
           </section>
         )}
       </div>
-      <nav className="mini-bottom-nav" aria-label="Asosiy menyu">
+      {moreOpen && (
+        <div
+          className="mini-more-overlay"
+          role="presentation"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) {
+              setMoreOpen(false)
+            }
+          }}
+        >
+          <section ref={moreMenuRef} className="mini-more-menu" role="dialog" aria-modal="true" aria-label="Ko‘proq bo‘limlar">
+            <div className="flex items-center justify-between">
+              <h2 className="font-bold">Ko‘proq</h2>
+              <button className="mini-icon-button" type="button" aria-label="Menyuni yopish" onClick={() => {
+                setMoreOpen(false)
+              }}>×</button>
+            </div>
+            <div className="mt-2 grid gap-1">
+              {morePages.map((id) => (
+                <button key={id} type="button" className="mini-more-item" onClick={() => navTo(id)}>
+                  <span>{pageTitles[id]}</span><ArrowLeft className="rotate-180" size={16} />
+                </button>
+              ))}
+              <button type="button" className="mini-more-item mini-more-logout" onClick={logout}>
+                <span>Chiqish</span><LogOut size={16} />
+              </button>
+            </div>
+          </section>
+        </div>
+      )}
+      <nav className="mini-bottom-nav" aria-label="Asosiy menyu" inert={moreOpen}>
         {visibleNav.map(({ id, label, icon: Icon }) => (
           <button key={id} type="button" onClick={() => navTo(id)} aria-current={page === id ? 'page' : undefined}>
             <Icon size={20} aria-hidden="true" />

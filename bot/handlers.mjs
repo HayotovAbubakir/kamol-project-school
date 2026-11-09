@@ -8,7 +8,7 @@ import {
   linkChatToStudent,
   unlinkChat,
 } from './db.mjs'
-import { BTN, mainKeyboard, removeKeyboard } from './keyboard.mjs'
+import { BTN, keyboardForRole, mainKeyboard, removeKeyboard, staffKeyboard } from './keyboard.mjs'
 import {
   alreadyLinked,
   attendanceText,
@@ -72,14 +72,55 @@ async function safeReply(ctx, fn) {
   }
 }
 
-async function requireStudent(db, chatId, ctx) {
+async function requireStudent(db, chatId, ctx, webAppUrl) {
   const link = await getLinkByChat(db, chatId)
   const student = link?.students
-  if (!student) {
-    await ctx.reply(needLink(), removeKeyboard())
+  if (student) return student
+  const profile = await db.getProfileByTelegram(Number(ctx.from?.id))
+  if (profile && profile.role !== 'student') {
+    await ctx.reply(`${profile.name}, bu buyruq ota-ona yoki o‘quvchi uchun. Mini Appni oching.`, {
+      reply_markup: staffKeyboard(webAppUrl),
+    })
     return null
   }
-  return student
+  await ctx.reply(needLink(), removeKeyboard())
+  return null
+}
+
+async function editOrReply(ctx, text) {
+  try {
+    await ctx.editMessageText(text)
+  } catch (error) {
+    const description = String(error?.description || error?.message || '')
+    if (/message is not modified/i.test(description)) return
+    if (/message to edit not found|message can.t be edited|message_id_invalid/i.test(description)) {
+      await ctx.reply(text)
+      return
+    }
+    throw error
+  }
+}
+
+export function splitTelegramText(value, maxLength = 3800) {
+  if (!Number.isInteger(maxLength) || maxLength < 1) {
+    throw new RangeError('Telegram matn bo‘lagi uzunligi musbat butun son bo‘lishi kerak.')
+  }
+  let text = String(value || '').trim()
+  const chunks = []
+  while (text.length > maxLength) {
+    let end = text.lastIndexOf('\n', maxLength)
+    if (end < maxLength / 2) end = text.lastIndexOf(' ', maxLength)
+    if (end < maxLength / 2) end = maxLength
+    if (end > 0 && end < text.length
+      && text.charCodeAt(end - 1) >= 0xD800 && text.charCodeAt(end - 1) <= 0xDBFF
+      && text.charCodeAt(end) >= 0xDC00 && text.charCodeAt(end) <= 0xDFFF) {
+      end -= 1
+    }
+    chunks.push(text.slice(0, end).trimEnd())
+    text = text.slice(end).trimStart()
+  }
+  if (text) chunks.push(text)
+  return chunks
 }
 
 async function selectedHomework(ctx, db) {
@@ -168,13 +209,23 @@ async function replyDavomat(ctx, db, student, webAppUrl) {
 
 async function replyJadval(ctx, db, student, webAppUrl) {
   const rows = await db.getStudentSchedule(student.id)
-  await ctx.reply(scheduleText(rows), { reply_markup: mainKeyboard(webAppUrl) })
+  const chunks = splitTelegramText(scheduleText(rows))
+  for (const [index, chunk] of chunks.entries()) {
+    await ctx.reply(chunk, index === chunks.length - 1
+      ? { reply_markup: mainKeyboard(webAppUrl) }
+      : undefined)
+  }
 }
 
 async function replyTolov(ctx, db, student, webAppUrl) {
   const groups = await getStudentGroups(db, student.id)
   const rows = await getPaymentsForStudent(db, student.id, 50)
-  await ctx.reply(paymentsText(rows, groups), { reply_markup: mainKeyboard(webAppUrl) })
+  const chunks = splitTelegramText(paymentsText(rows, groups))
+  for (const [index, chunk] of chunks.entries()) {
+    await ctx.reply(chunk, index === chunks.length - 1
+      ? { reply_markup: mainKeyboard(webAppUrl) }
+      : undefined)
+  }
 }
 
 export function registerHandlers(bot, db, webAppUrl, token) {
@@ -204,7 +255,7 @@ export function registerHandlers(bot, db, webAppUrl, token) {
       const payload = String(ctx.match || '').trim()
       if (payload.startsWith('hw_')) {
         const homeworkId = payload.slice(3)
-        const student = await requireStudent(db, chatId, ctx)
+        const student = await requireStudent(db, chatId, ctx, webAppUrl)
         if (!student) return
         const homework = await db.selectHomework(chatId, homeworkId)
         if (!homework?.title) {
@@ -219,7 +270,7 @@ export function registerHandlers(bot, db, webAppUrl, token) {
         const code = staff ? payload.slice(6) : payload
         const profile = await db.consumeInvite(code, Number(ctx.from.id), staff)
         await ctx.reply(`Telegram akkaunt ulandi, ${profile.name} (${roleLabel(profile.role)}).`, {
-          reply_markup: mainKeyboard(webAppUrl),
+          reply_markup: keyboardForRole(profile.role, webAppUrl),
         })
         return
       }
@@ -231,7 +282,7 @@ export function registerHandlers(bot, db, webAppUrl, token) {
       const profile = await db.getProfileByTelegram(Number(ctx.from.id))
       if (profile) {
         await ctx.reply(`Xush kelibsiz, ${profile.name}! Mini App orqali davom eting.`, {
-          reply_markup: mainKeyboard(webAppUrl),
+          reply_markup: keyboardForRole(profile.role, webAppUrl),
         })
         return
       }
@@ -254,14 +305,14 @@ export function registerHandlers(bot, db, webAppUrl, token) {
       }
       const profile = await db.consumeInvite(code, Number(ctx.from.id), true)
       await ctx.reply(`Login muvaffaqiyatli yakunlandi. Rol: ${roleLabel(profile.role)}.\nMini App’ni ochishingiz mumkin.`, {
-        reply_markup: mainKeyboard(webAppUrl),
+        reply_markup: keyboardForRole(profile.role, webAppUrl),
       })
     })
   })
 
   bot.command('savol', async (ctx) => {
     await safeReply(ctx, async () => {
-      const student = await requireStudent(db, ctx.chat.id, ctx)
+      const student = await requireStudent(db, ctx.chat.id, ctx, webAppUrl)
       if (!student) return
       const text = String(ctx.match || '').trim()
       if (!text) {
@@ -278,7 +329,7 @@ export function registerHandlers(bot, db, webAppUrl, token) {
       const homeworkId = ctx.match[1]
       await db.selectHomework(ctx.chat.id, homeworkId)
       await ctx.answerCallbackQuery({ text: 'Vazifa tanlandi.' })
-      await ctx.editMessageText('Endi ushbu vazifa uchun istalgan fayl, matn, keyin esa kamida 3 soniyalik dumaloq video yoki ovozli xabar yuboring.')
+      await editOrReply(ctx, 'Endi ushbu vazifa uchun istalgan fayl, matn, keyin esa kamida 3 soniyalik dumaloq video yoki ovozli xabar yuboring.')
     })
   })
 
@@ -286,13 +337,13 @@ export function registerHandlers(bot, db, webAppUrl, token) {
     await safeReply(ctx, async () => {
       await db.confirmHomework(ctx.chat.id, ctx.match[1])
       await ctx.answerCallbackQuery({ text: 'Topshiriq yuborildi.' })
-      await ctx.editMessageText('Uy vazifasi o‘qituvchiga yuborildi. Rahmat!')
+      await editOrReply(ctx, 'Uy vazifasi o‘qituvchiga yuborildi. Rahmat!')
     })
   })
 
   bot.command('menu', async (ctx) => {
     await safeReply(ctx, async () => {
-      const student = await requireStudent(db, ctx.chat.id, ctx)
+      const student = await requireStudent(db, ctx.chat.id, ctx, webAppUrl)
       if (!student) return
       await ctx.reply(`${student.name}\n\n${menuText()}`, { reply_markup: mainKeyboard(webAppUrl) })
     })
@@ -300,7 +351,7 @@ export function registerHandlers(bot, db, webAppUrl, token) {
 
   bot.command('holat', async (ctx) => {
     await safeReply(ctx, async () => {
-      const student = await requireStudent(db, ctx.chat.id, ctx)
+      const student = await requireStudent(db, ctx.chat.id, ctx, webAppUrl)
       if (!student) return
       await replyHolat(ctx, db, student, webAppUrl)
     })
@@ -308,7 +359,7 @@ export function registerHandlers(bot, db, webAppUrl, token) {
 
   bot.command('jadval', async (ctx) => {
     await safeReply(ctx, async () => {
-      const student = await requireStudent(db, ctx.chat.id, ctx)
+      const student = await requireStudent(db, ctx.chat.id, ctx, webAppUrl)
       if (!student) return
       await replyJadval(ctx, db, student, webAppUrl)
     })
@@ -316,7 +367,7 @@ export function registerHandlers(bot, db, webAppUrl, token) {
 
   bot.command('davomat', async (ctx) => {
     await safeReply(ctx, async () => {
-      const student = await requireStudent(db, ctx.chat.id, ctx)
+      const student = await requireStudent(db, ctx.chat.id, ctx, webAppUrl)
       if (!student) return
       await replyDavomat(ctx, db, student, webAppUrl)
     })
@@ -324,7 +375,7 @@ export function registerHandlers(bot, db, webAppUrl, token) {
 
   bot.command('tolov', async (ctx) => {
     await safeReply(ctx, async () => {
-      const student = await requireStudent(db, ctx.chat.id, ctx)
+      const student = await requireStudent(db, ctx.chat.id, ctx, webAppUrl)
       if (!student) return
       await replyTolov(ctx, db, student, webAppUrl)
     })
@@ -341,7 +392,7 @@ export function registerHandlers(bot, db, webAppUrl, token) {
     await safeReply(ctx, async () => {
       const caption = String(ctx.message.caption || '')
       if (/^\/savol(?:@\w+)?\s+/i.test(caption)) {
-        const student = await requireStudent(db, ctx.chat.id, ctx)
+        const student = await requireStudent(db, ctx.chat.id, ctx, webAppUrl)
         if (!student) return
         await db.createQuestion(ctx.chat.id, caption.replace(/^\/savol(?:@\w+)?\s+/i, '').trim(), {
           file_id: ctx.message.document.file_id,
@@ -359,7 +410,7 @@ export function registerHandlers(bot, db, webAppUrl, token) {
     await safeReply(ctx, async () => {
       const caption = String(ctx.message.caption || '')
       if (/^\/savol(?:@\w+)?\s+/i.test(caption)) {
-        const student = await requireStudent(db, ctx.chat.id, ctx)
+        const student = await requireStudent(db, ctx.chat.id, ctx, webAppUrl)
         if (!student) return
         const photo = ctx.message.photo.at(-1)
         await db.createQuestion(ctx.chat.id, caption.replace(/^\/savol(?:@\w+)?\s+/i, '').trim(), {
@@ -379,7 +430,7 @@ export function registerHandlers(bot, db, webAppUrl, token) {
       await safeReply(ctx, async () => {
         const caption = String(ctx.message.caption || '')
         if (proofKind === 'voice' && /^\/savol(?:@\w+)?\s+/i.test(caption)) {
-          const student = await requireStudent(db, ctx.chat.id, ctx)
+          const student = await requireStudent(db, ctx.chat.id, ctx, webAppUrl)
           if (!student) return
           await db.createQuestion(ctx.chat.id, caption.replace(/^\/savol(?:@\w+)?\s+/i, '').trim(), {
             file_id: ctx.message.voice.file_id,
@@ -446,6 +497,14 @@ export function registerHandlers(bot, db, webAppUrl, token) {
           return
         }
         await ctx.reply(menuText(), { reply_markup: mainKeyboard(webAppUrl) })
+        return
+      }
+
+      const staffProfile = await db.getProfileByTelegram(Number(ctx.from.id))
+      if (staffProfile && staffProfile.role !== 'student') {
+        await ctx.reply(`${staffProfile.name}, Mini App orqali davom eting.`, {
+          reply_markup: staffKeyboard(webAppUrl),
+        })
         return
       }
 
