@@ -2111,7 +2111,7 @@ export default function MainApp() {
                 <label className="mini-field"><span>Ota telefoni</span><input type="tel" value={studentForm.fatherPhone} onChange={(event) => setStudentForm({ ...studentForm, fatherPhone: event.target.value })} /></label>
                 <label className="mini-field"><span>Ona telefoni</span><input type="tel" value={studentForm.motherPhone} onChange={(event) => setStudentForm({ ...studentForm, motherPhone: event.target.value })} /></label>
                 <label className="mini-field"><span>Mini App login</span><input value={studentForm.username} onChange={(event) => setStudentForm({ ...studentForm, username: event.target.value, autoUsername: false })} required /><small>Ism.familiya; band bo‘lsa avtomatik raqam qo‘shiladi.</small></label>
-                {!editingStudentId && <label className="mini-field"><span>O‘quvchi paroli (kamida 6 belgi)</span><input type="password" autoComplete="new-password" value={studentForm.password} onChange={(event) => setStudentForm({ ...studentForm, password: event.target.value })} minLength={6} required /><small>{studentForm.password.length < 6 ? 'Kuchsiz — kamida 6 belgi kiriting.' : studentForm.password.length < 10 ? 'O‘rtacha parol.' : 'Kuchli parol.'}</small><small>Parolni boshqa joylarda ishlatmang.</small></label>}
+                {!editingStudentId && <label className="mini-field"><span>O‘quvchi paroli (kamida 6 belgi)</span><input type="password" autoComplete="new-password" value={studentForm.password} onChange={(event) => setStudentForm({ ...studentForm, password: event.target.value })} minLength={6} required /><small>{studentForm.password.length < 6 ? 'Kuchsiz — kamida 6 belgi kiriting.' : studentForm.password.length < 10 ? 'O‘rtacha parol.' : 'Kuchli parol.'}</small></label>}
                 {!editingStudentId && <label className="mini-field"><span>Guruh</span>
                   <select value={studentForm.groupId} onChange={(event) => setStudentForm({ ...studentForm, groupId: event.target.value })}>
                     <option value="">Keyinroq biriktiraman</option>
@@ -2153,7 +2153,6 @@ export default function MainApp() {
                       <form className="mt-3 grid gap-2" onSubmit={changeStudentCredentials}>
                         <label className="mini-field"><span>Login</span><input value={studentPasswordForm.username} onChange={(event) => setStudentPasswordForm({ ...studentPasswordForm, username: event.target.value })} required /></label>
                         <label className="mini-field"><span>Yangi parol (kamida 6 belgi)</span><input type="password" value={studentPasswordForm.password} onChange={(event) => setStudentPasswordForm({ ...studentPasswordForm, password: event.target.value })} minLength={6} autoComplete="new-password" required /></label>
-                        <small>Parolni boshqa joylarda ishlatmang.</small>
                         <div className="flex gap-2"><ActionButton type="submit" disabled={busy}>Saqlash</ActionButton><ActionButton className="mini-secondary" disabled={busy} onClick={() => setStudentPasswordForm({ studentId: '', username: '', password: '' })}>Bekor qilish</ActionButton></div>
                       </form>
                     )}

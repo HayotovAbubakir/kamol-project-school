@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { Inbox } from 'lucide-react'
 import { PageEnter } from '../components/motion/PageMotion'
 import { PageHeader, StatusBadge } from '../components/ui'
 import Select from '../components/Select'
@@ -133,8 +134,8 @@ export default function Questions() {
         </div>
       )}
       {notice && <div className="alert alert-success" role="status" aria-live="polite">{notice}</div>}
-      <div className="card mb-4 grid grid-cols-1 gap-3 p-4 sm:grid-cols-[1fr_2fr_auto]">
-        <label className="field">
+      <div className="card question-toolbar mb-4">
+        <label className="field question-toolbar-field">
           <span>Holati</span>
           <Select
             aria-label="Holati"
@@ -148,7 +149,7 @@ export default function Questions() {
             ]}
           />
         </label>
-        <label className="field">
+        <label className="field question-toolbar-search">
           <span>Qidirish</span>
           <input
             className="input"
@@ -160,26 +161,27 @@ export default function Questions() {
             placeholder="O‘quvchi yoki xabar matni…"
           />
         </label>
-        <div className="self-end text-sm text-muted">O‘qilmagan: <strong>{unreadTotal}</strong></div>
+        <div className="question-toolbar-side">
+          <span className="question-unread-chip">O‘qilmagan: <strong>{unreadTotal}</strong></span>
+          {(status || search) ? (
+            <button type="button" className="btn btn-outline btn-sm" onClick={() => { setStatus(''); setSearch('') }}>Tozalash</button>
+          ) : null}
+        </div>
       </div>
-      {loading ? <div className="card p-6 text-muted">Savollar yuklanmoqda…</div>
-        : !tickets.length ? (
-          <div className="card grid gap-2 p-6 text-center">
-            <h2 className="font-semibold">{hasFilters ? 'Bu filtrga mos savol topilmadi' : 'Hozircha savollar yo‘q'}</h2>
-            <p className="text-sm text-muted">
-              {hasFilters ? 'Boshqa so‘z bilan qidiring yoki filtrlarni tozalang.' : 'O‘quvchilar yuborgan savollar shu yerda ko‘rinadi.'}
-            </p>
-            {hasFilters && (
-              <button type="button" className="btn btn-outline mx-auto mt-2" onClick={() => {
-                setStatus('')
-                setSearch('')
-              }}>Filtrlarni tozalash</button>
-            )}
-          </div>
-        )
+      {loading ? <div className="grid gap-3" aria-busy="true" aria-label="Savollar yuklanmoqda">
+        {[0, 1, 2].map((row) => <div key={row} className="card skeleton-row" />)}
+      </div>
+        : !tickets.length ? <div className="card empty-state">
+          <Inbox size={30} aria-hidden="true" />
+          <strong>{hasFilters ? 'Bu filtrga mos savol topilmadi' : 'Hozircha savollar yo‘q'}</strong>
+          <span>{hasFilters ? 'Boshqa so‘z bilan qidiring yoki filtrlarni tozalang.' : 'O‘quvchilar yuborgan savollar shu yerda ko‘rinadi.'}</span>
+          {hasFilters ? (
+            <button type="button" className="btn btn-outline btn-sm" onClick={() => { setStatus(''); setSearch('') }}>Filtrlarni tozalash</button>
+          ) : null}
+        </div>
           : <div className="grid gap-3">
             {tickets.map((ticket) => (
-              <section key={ticket.id} className="card p-4">
+              <section key={ticket.id} className={`card p-4 question-ticket${Number(ticket.unread_count) > 0 ? ' is-unread' : ''}`}>
                 <button type="button" className="flex w-full flex-wrap items-center justify-between gap-3 text-left" onClick={() => setExpanded(expanded === ticket.id ? null : ticket.id)}>
                   <span className="min-w-0">
                     <strong className="block truncate">{ticket.student_name}</strong>

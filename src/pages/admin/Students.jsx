@@ -61,7 +61,6 @@ export default function AdminStudents() {
   const [paying, setPaying] = useState(false)
   const [addGroupId, setAddGroupId] = useState('')
   const [groupBusy, setGroupBusy] = useState(false)
-  const [codeCopied, setCodeCopied] = useState(false)
   const [search, setSearch] = useState('')
   const [revealedPassword, setRevealedPassword] = useState('')
   const [passwordOpen, setPasswordOpen] = useState(false)
@@ -158,7 +157,6 @@ export default function AdminStudents() {
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setAddGroupId('')
-    setCodeCopied(false)
     setRevealedPassword('')
     if (passwordTimer.current) window.clearTimeout(passwordTimer.current)
   }, [selected?.id])
@@ -166,17 +164,6 @@ export default function AdminStudents() {
   useEffect(() => () => {
     if (passwordTimer.current) window.clearTimeout(passwordTimer.current)
   }, [])
-
-  const copyStudentCode = async () => {
-    if (!selected?.publicCode) return
-    try {
-      await navigator.clipboard.writeText(selected.publicCode)
-      setCodeCopied(true)
-      setTimeout(() => setCodeCopied(false), 2000)
-    } catch {
-      /* ignore */
-    }
-  }
 
   const issueTelegramInvite = async () => {
     if (!selected || inviteBusy) return
@@ -464,24 +451,7 @@ export default function AdminStudents() {
               <strong className={due > 0 ? 'money-text money-text-danger' : ''}>{formatMoney(due)}</strong>
             </div>
 
-            <div className="detail-meta-item student-detail-cell-6 student-detail-id">
-              <span>{t('admin.label.studentId')}</span>
-              <div className="student-code-row">
-                <strong className="student-public-code">{selected.publicCode || '—'}</strong>
-                {selected.publicCode ? (
-                  <button
-                    type="button"
-                    className="btn btn-outline btn-sm student-code-copy"
-                    onClick={copyStudentCode}
-                    title={codeCopied ? t('common.copied') : t('common.copy')}
-                  >
-                    <Copy size={14} />
-                    {codeCopied ? t('common.copied') : t('common.copy')}
-                  </button>
-                ) : null}
-              </div>
-            </div>
-            <div className="detail-meta-item student-detail-cell-6">
+            <div className="detail-meta-item student-detail-cell-3">
               <span>Mini App login</span>
               <div className="student-code-row">
                 <strong>{selected.username || '—'}</strong>
@@ -492,7 +462,7 @@ export default function AdminStudents() {
                 }}><Copy size={14} /> Nusxalash</button>}
               </div>
             </div>
-            <div className="detail-meta-item student-detail-cell-6">
+            <div className="detail-meta-item student-detail-cell-3">
               <span>O‘quvchi paroli</span>
               {revealedPassword
                 ? <strong aria-live="polite">{revealedPassword}</strong>
@@ -505,7 +475,6 @@ export default function AdminStudents() {
                   setPasswordOpen(true)
                 }}>Login / parolni o‘zgartirish</button>
               </div>
-              <small>Parolni boshqa joylarda ishlatmang.</small>
             </div>
 
             {(() => {
@@ -796,7 +765,6 @@ export default function AdminStudents() {
         <form id="student-password-form" onSubmit={saveStudentPassword} className="entity-form">
           <div className="field"><label>Login</label><input className="input" value={passwordForm.username} onChange={(event) => setPasswordForm({ ...passwordForm, username: event.target.value })} required /></div>
           <div className="field"><label>Yangi parol (kamida 6 belgi)</label><input type="password" className="input" value={passwordForm.password} onChange={(event) => setPasswordForm({ ...passwordForm, password: event.target.value })} minLength={6} autoComplete="new-password" required /></div>
-          <small>Parolni boshqa joylarda ishlatmang.</small>
         </form>
       </Modal>
 
