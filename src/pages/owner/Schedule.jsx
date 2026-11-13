@@ -6,6 +6,7 @@ import GlassPane from '../../components/GlassPane'
 import { useData } from '../../context/DataContext'
 import { useLanguage } from '../../context/LanguageContext'
 import { formatLessonTime, getTodayDayValue, getTodayLessons } from '../../lib/analytics'
+import { translate as tr } from '../../i18n/runtime'
 
 const WEEKDAY_KEYS = {
   1: 'domain.weekday.monday',
@@ -71,9 +72,9 @@ export default function OwnerSchedule() {
                   <span className="home-lesson-time">{formatLessonTime(lesson)}</span>
                   <span className="home-lesson-group">
                     {lesson.group}
-                    {lesson.status === 'changed' && <span className="schedule-change-badge">O‘zgartirilgan</span>}
-                    {lesson.status === 'cancelled' && <span className="schedule-cancel-badge">Bekor qilingan</span>}
-                    {lesson.status === 'rescheduled' && <span className="schedule-change-badge">Ko‘chirilgan · {lesson.newDate}</span>}
+                    {lesson.status === 'changed' && <span className="schedule-change-badge">{tr('O‘zgartirilgan')}</span>}
+                    {lesson.status === 'cancelled' && <span className="schedule-cancel-badge">{tr('Bekor qilingan')}</span>}
+                    {lesson.status === 'rescheduled' && <span className="schedule-change-badge">{tr('Ko‘chirilgan ·')} {lesson.newDate}</span>}
                   </span>
                   <span className="home-lesson-teacher">{lesson.teacher}</span>
                 </div>

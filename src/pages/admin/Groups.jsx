@@ -23,6 +23,7 @@ import { useLanguage } from '../../context/LanguageContext'
 import { getGroupMonthFinance, groupTeacherIds, primaryGroupTeacherId, slotTeacherId } from '../../lib/store'
 import { groupSearchFields, matchesSearch } from '../../lib/search'
 import { DAYS, currentMonthYear, formatMoney, formatPhone } from '../../lib/utils'
+import { translate as tr } from '../../i18n/runtime'
 
 const emptySlot = () => ({ day: 1, startTime: '09:00', endTime: '10:30', teacherId: '' })
 const DAY_KEYS = {
@@ -103,6 +104,8 @@ export default function AdminGroups() {
     setError('')
     try {
       const schedule = (group.schedule || []).map((slot, i) => ({
+        // slotId saqlanmasa, shu darsga bog‘langan bir kunlik o‘zgarishlar uziladi.
+        ...(slot.slotId || slot.slot_id ? { slotId: slot.slotId || slot.slot_id } : {}),
         day: Number(slot.day),
         startTime: slot.startTime,
         endTime: slot.endTime,
@@ -365,7 +368,7 @@ export default function AdminGroups() {
                   />
                   <button type="button" className="btn btn-outline btn-sm"
                     onClick={() => setScheduleChange({ group: selected, slotId })}>
-                    O‘zgartirish
+                   {tr('O‘zgartirish')}
                   </button>
                 </div>
               )
@@ -588,10 +591,10 @@ export default function AdminGroups() {
           </div>
           {editingId ? (
             <div className="field">
-              <label htmlFor="schedule-reason">Jadval o‘zgarish sababi</label>
+              <label htmlFor="schedule-reason">{tr('Jadval o‘zgarish sababi')}</label>
               <input id="schedule-reason" className="input" maxLength="500" value={form.scheduleReason}
                 onChange={(event) => setForm({ ...form, scheduleReason: event.target.value })}
-                placeholder="Masalan: yangi o‘quv guruhi jadvali" />
+                placeholder={tr('Masalan: yangi o‘quv guruhi jadvali')} />
             </div>
           ) : null}
           </section>

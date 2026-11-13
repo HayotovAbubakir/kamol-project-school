@@ -4,6 +4,12 @@ export const BTN = {
   holat: 'Holat',
   jadval: 'Jadval',
   davomat: 'Davomat',
+  tolov: 'To‘lovlar tarixi',
+  unlink: 'Bog‘lanishni uzish',
+}
+
+/** Foydalanuvchilarda saqlanib qolgan eski klaviatura yozuvlari ham ishlashi uchun. */
+export const LEGACY_BTN = {
   tolov: "To'lovlar tarixi",
   unlink: 'Uzish',
 }
@@ -33,13 +39,13 @@ export function removeKeyboard() {
 }
 
 export const BOT_COMMANDS = [
-  { command: 'start', description: 'Boshlash / qayta ulash' },
-  { command: 'login', description: 'Staff kod bilan kirish' },
-  { command: 'holat', description: 'Shu oy to‘lov va guruhlar' },
-  { command: 'jadval', description: 'Yaqin 14 kun dars jadvali' },
-  { command: 'davomat', description: 'Oxirgi 14 kun davomat' },
-  { command: 'tolov', description: 'Jami to‘lovlar tarixi' },
-  { command: 'savol', description: 'Qabulxonaga savol yuborish' },
+  { command: 'start', description: 'Boshlash yoki qayta ulash' },
   { command: 'menu', description: 'Asosiy menyu' },
-  { command: 'unlink', description: 'Bog‘lashni uzish' },
+  { command: 'holat', description: 'Shu oy to‘lov holati va guruhlar' },
+  { command: 'jadval', description: 'Yaqin 14 kunlik dars jadvali' },
+  { command: 'davomat', description: 'Oxirgi 14 kunlik davomat' },
+  { command: 'tolov', description: 'To‘lovlar tarixi' },
+  { command: 'savol', description: 'Qabulxonaga savol yuborish' },
+  { command: 'login', description: 'Xodimlar uchun kod bilan kirish' },
+  { command: 'unlink', description: 'Bog‘lanishni uzish' },
 ]

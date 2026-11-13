@@ -7,6 +7,7 @@ import { useData } from '../../context/DataContext'
 import { useLanguage } from '../../context/LanguageContext'
 import { remainingFee } from '../../lib/store'
 import { currentMonthYear, formatDate, formatMoney } from '../../lib/utils'
+import { translate as tr } from '../../i18n/runtime'
 
 const METHOD_LABEL = { cash: 'Naqd', card: 'Karta', transfer: "O'tkazma" }
 
@@ -115,7 +116,7 @@ export default function AdminPayments() {
     e.preventDefault()
     setError('')
     if (voidReason.trim().length < 3) {
-      setError('Bekor qilish sababi majburiy (kamida 3 belgi).')
+      setError(tr('Bekor qilish sababi majburiy (kamida 3 belgi).'))
       return
     }
     setSaving(true)
@@ -142,7 +143,7 @@ export default function AdminPayments() {
   }
 
   async function removePayment(payment) {
-    if (!window.confirm("To'lov butunlay o'chirilsinmi?")) return
+    if (!window.confirm(tr('To\'lov butunlay o\'chirilsinmi?'))) return
     setError('')
     try {
       await deletePayment(payment.id)
@@ -171,10 +172,10 @@ export default function AdminPayments() {
                 <th>{t('admin.label.student')}</th>
                 <th>{t('common.amount')}</th>
                 <th>{t('common.month')}</th>
-                <th>Usul</th>
+                <th>{tr('Usul')}</th>
                 <th>{t('common.date')}</th>
-                <th>Holati</th>
-                <th>Amallar</th>
+                <th>{tr('Holati')}</th>
+                <th>{tr('Amallar')}</th>
               </tr>
             </thead>
             <tbody>
@@ -189,20 +190,20 @@ export default function AdminPayments() {
                   </td>
                   <td>{formatMoney(p.amount)}</td>
                   <td>{p.month}/{p.year}</td>
-                  <td>{METHOD_LABEL[p.method] || 'Naqd'}</td>
+                  <td>{METHOD_LABEL[p.method] || tr('Naqd')}</td>
                   <td>{formatDate(p.paidAt)}</td>
-                  <td>{p.voidedAt ? `Bekor qilingan: ${p.voidReason}` : 'Faol'}</td>
+                  <td>{p.voidedAt ? `Bekor qilingan: ${p.voidReason}` : tr('Faol')}</td>
                   <td>
                     <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
                       {!p.voidedAt && (
                         <>
-                          <button type="button" className="btn btn-outline btn-sm" onClick={() => openEdit(p)}>Tuzatish</button>
-                          <button type="button" className="btn btn-outline btn-sm" onClick={() => openVoid(p)}>Bekor qilish</button>
+                          <button type="button" className="btn btn-outline btn-sm" onClick={() => openEdit(p)}>{tr('Tuzatish')}</button>
+                          <button type="button" className="btn btn-outline btn-sm" onClick={() => openVoid(p)}>{tr('Bekor qilish')}</button>
                         </>
                       )}
-                      <button type="button" className="btn btn-outline btn-sm" onClick={() => openHistory(p)}>Tarix</button>
+                      <button type="button" className="btn btn-outline btn-sm" onClick={() => openHistory(p)}>{tr('Tarix')}</button>
                       {user?.role === 'owner' && (
-                        <button type="button" className="btn btn-outline btn-sm" onClick={() => removePayment(p)}>O&apos;chirish</button>
+                        <button type="button" className="btn btn-outline btn-sm" onClick={() => removePayment(p)}>{tr('O\'chirish')}</button>
                       )}
                     </div>
                   </td>
@@ -257,7 +258,7 @@ export default function AdminPayments() {
               required
               onChange={(e) => {
                 const student = data.students.find((s) => s.id === e.target.value)
-                const due = student ? remainingFee(student, data.payments, Number(studentForm.month), Number(studentForm.year)) : 0
+                const due = student ? remainingFee(student, data.payments, Number(studentForm.month), Number(studentForm.year), data.groups) : 0
                 setStudentForm({ ...studentForm, studentId: e.target.value, amount: due || student?.monthlyFee || '' })
               }}
               options={[
@@ -275,7 +276,7 @@ export default function AdminPayments() {
       </Modal>
       <Modal
         open={editOpen}
-        title="To'lovni tuzatish"
+        title={tr('To\'lovni tuzatish')}
         onClose={() => setEditOpen(false)}
         actions={(
           <>
@@ -294,47 +295,47 @@ export default function AdminPayments() {
           <div className="grid-2">
             <div className="field"><label>{t('common.date')}</label><input type="date" className="input" value={editForm.paidAt} onChange={(e) => setEditForm({ ...editForm, paidAt: e.target.value })} required /></div>
             <div className="field">
-              <label>To&apos;lov usuli</label>
+              <label>{tr('To\'lov usuli')}</label>
               <Select value={editForm.method} onChange={(e) => setEditForm({ ...editForm, method: e.target.value })} options={Object.entries(METHOD_LABEL).map(([value, label]) => ({ value, label }))} />
             </div>
           </div>
-          <div className="field"><label>Izoh</label><textarea rows="2" className="input" value={editForm.note} onChange={(e) => setEditForm({ ...editForm, note: e.target.value })} /></div>
-          <div className="field"><label>Tuzatish sababi (ixtiyoriy)</label><input className="input" value={editForm.reason} onChange={(e) => setEditForm({ ...editForm, reason: e.target.value })} /></div>
+          <div className="field"><label>{tr('Izoh')}</label><textarea rows="2" className="input" value={editForm.note} onChange={(e) => setEditForm({ ...editForm, note: e.target.value })} /></div>
+          <div className="field"><label>{tr('Tuzatish sababi (ixtiyoriy)')}</label><input className="input" value={editForm.reason} onChange={(e) => setEditForm({ ...editForm, reason: e.target.value })} /></div>
         </form>
       </Modal>
       <Modal
         open={voidOpen}
-        title="To'lovni bekor qilish"
+        title={tr('To\'lovni bekor qilish')}
         onClose={() => setVoidOpen(false)}
         actions={(
           <>
             <button type="button" className="btn btn-outline" onClick={() => setVoidOpen(false)}>{t('common.cancel')}</button>
-            <button type="submit" form="pay-void-form" className="btn btn-primary" disabled={saving}>{saving ? t('common.saving') : 'Bekor qilish'}</button>
+            <button type="submit" form="pay-void-form" className="btn btn-primary" disabled={saving}>{saving ? t('common.saving') : tr('Bekor qilish')}</button>
           </>
         )}
       >
         {error && <div className="alert alert-error">{error}</div>}
         <form id="pay-void-form" onSubmit={submitVoid}>
-          <p style={{ marginTop: 0, color: 'var(--muted)' }}>To&apos;lov o&apos;chirilmaydi — bekor qilinadi va tarixda sababi bilan qoladi.</p>
-          <div className="field"><label>Bekor qilish sababi (majburiy)</label><textarea rows="3" className="input" value={voidReason} onChange={(e) => setVoidReason(e.target.value)} required /></div>
+          <p style={{ marginTop: 0, color: 'var(--muted)' }}>{tr('To\'lov o\'chirilmaydi — bekor qilinadi va tarixda sababi bilan qoladi.')}</p>
+          <div className="field"><label>{tr('Bekor qilish sababi (majburiy)')}</label><textarea rows="3" className="input" value={voidReason} onChange={(e) => setVoidReason(e.target.value)} required /></div>
         </form>
       </Modal>
       <Modal
         open={historyOpen}
-        title="To'lov tarixi"
+        title={tr('To\'lov tarixi')}
         onClose={() => setHistoryOpen(false)}
-        actions={<button type="button" className="btn btn-outline" onClick={() => setHistoryOpen(false)}>Yopish</button>}
+        actions={<button type="button" className="btn btn-outline" onClick={() => setHistoryOpen(false)}>{tr('Yopish')}</button>}
       >
         {error && <div className="alert alert-error">{error}</div>}
-        {history.length === 0 ? <p className="empty-state">Tarix yozuvlari yo&apos;q.</p> : (
+        {history.length === 0 ? <p className="empty-state">{tr('Tarix yozuvlari yo\'q.')}</p> : (
           <div style={{ display: 'grid', gap: 10 }}>
             {history.map((row) => {
               const oldData = JSON.parse(row.old_data || '{}')
               const newData = JSON.parse(row.new_data || '{}')
               return (
                 <div key={row.id} className="card" style={{ padding: 12 }}>
-                  <strong>{row.action === 'voided' ? 'Bekor qilindi' : 'Tuzatildi'}</strong>
-                  <div style={{ color: 'var(--muted)', fontSize: 13 }}>{row.actor_name || 'Xodim'} · {formatDate(row.created_at)}</div>
+                  <strong>{row.action === 'voided' ? tr('Bekor qilindi') : tr('Tuzatildi')}</strong>
+                  <div style={{ color: 'var(--muted)', fontSize: 13 }}>{row.actor_name || tr('Xodim')} · {formatDate(row.created_at)}</div>
                   {row.reason && <div style={{ fontSize: 13 }}>Sabab: {row.reason}</div>}
                   <div style={{ fontSize: 13 }}>{formatMoney(oldData.amount)} → {formatMoney(newData.amount)}</div>
                 </div>

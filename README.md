@@ -68,3 +68,24 @@ npm run bot:webhook:set
 ```
 
 Fayl Telegram’dan Worker API’ga uzatiladi va R2’da saqlanadi. Bot polling jarayonini webhook bilan bir vaqtda ishga tushirmang.
+
+## Face ID davomat (Hikvision DS-K1T)
+
+Yuzni terminalning o‘zi taniydi; Worker faqat o‘quvchi rasmlarini terminalga yuboradi va skan hodisalarini davomatga aylantiradi. `migrations/0009_face_id.sql` qo‘llangan bo‘lishi kerak.
+
+1. Owner: Akkaunt sozlamalari → Face ID qurilmalari → qurilma qo‘shing. Token (`kfd_…`) faqat bir marta ko‘rsatiladi.
+2. O‘quvchi qo‘shishda yoki keyin “Rasm qo‘shish / yangilash” orqali 3 ta rasm (old, chap, o‘ng) oling.
+3. Terminal bilan bir tarmoqdagi kompyuterda ko‘prikni ishga tushiring:
+
+```sh
+HIK_HOST=192.168.1.64 HIK_USER=admin HIK_PASSWORD=... \
+WORKER_URL=https://<worker-domeni> DEVICE_TOKEN=kfd_... \
+node scripts/hikvision-bridge.mjs --check   # ulanishni tekshirish
+node scripts/hikvision-bridge.mjs           # doimiy ishlash
+```
+
+Ko‘prik rasmlarni terminalga yuklaydi (`UserInfo` + `FDLib`) va har `POLL_SECONDS` (standart 10) soniyada `AcsEvent` hodisalarini Worker’ga yuboradi. Sozlamalarni `--config bridge.json` fayli orqali ham berish mumkin.
+
+Muqobil (kompyutersiz) yo‘l — terminalning “HTTP Listening” funksiyasi: Network → Advanced → HTTP Listening manziliga `https://<worker-domeni>/api/face/device/events?token=kfd_...` ni yozing. Bu holatda skanlar to‘g‘ridan-to‘g‘ri keladi, lekin rasmlarni terminalga yuborish uchun baribir ko‘prikni vaqti-vaqti bilan (`--once`) ishga tushirish kerak.
+
+Qoida: dars boshlanishigacha (60 daqiqa oldindan ham) skan — “Keldi”; keyin — “Kechikdi” (daqiqasi bilan); dars tugaganidan 5 daqiqa o‘tib skan bo‘lmasa — “Kelmagan”. Kechikish va kelmaslik haqida o‘quvchi va ota-onaga Telegram xabari boradi. O‘qituvchining qo‘lda belgilashi zaxira usul; Face ID yozuvini faqat tasdiqlab o‘zgartirish mumkin.

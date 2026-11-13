@@ -1,5 +1,5 @@
 import { studentMonthlyFee, studentPaidForMonth, isStudentDebtor, slotTeacherId } from './store'
-import { localDateISO } from './utils'
+import { currentMonthYear, localDateISO } from './utils'
 import { getRuntimeLocale, translate } from '../i18n/runtime'
 import { getEffectiveLesson } from '../../shared/schedule.js'
 
@@ -9,17 +9,17 @@ const MONTH_KEYS = [
 ]
 
 export function getLast6MonthsTrend(data) {
-  const now = new Date()
+  const current = currentMonthYear()
   const expected = data.students.reduce(
     (sum, s) => sum + (Number(s.monthlyFee) || studentMonthlyFee(s, data.groups) || 0),
     0,
   )
   return Array.from({ length: 6 }, (_, i) => {
-    const d = new Date(now.getFullYear(), now.getMonth() - (5 - i), 1)
+    const d = new Date(current.year, current.month - 1 - (5 - i), 1)
     const month = d.getMonth() + 1
     const year = d.getFullYear()
     const paid = data.payments
-      .filter((p) => Number(p.month) === month && Number(p.year) === year)
+      .filter((p) => !p.voidedAt && Number(p.month) === month && Number(p.year) === year)
       .reduce((s, p) => s + (Number(p.amount) || 0), 0)
     return {
       name: translate(`domain.month.${MONTH_KEYS[month - 1]}`),
@@ -35,7 +35,7 @@ export function getLast6MonthsTrend(data) {
 
 export function getFinanceBreakdown(data, month, year) {
   const paid = data.payments
-    .filter((p) => Number(p.month) === month && Number(p.year) === year)
+    .filter((p) => !p.voidedAt && Number(p.month) === month && Number(p.year) === year)
     .reduce((s, p) => s + (Number(p.amount) || 0), 0)
   const expected = data.students.reduce(
     (sum, s) => sum + (Number(s.monthlyFee) || studentMonthlyFee(s, data.groups) || 0),
@@ -71,7 +71,7 @@ export function getPaymentStatus(data, month, year) {
   let paid = 0
   let unpaid = 0
   data.students.forEach((s) => {
-    const fee = Number(s.monthlyFee) || 0
+    const fee = studentMonthlyFee(s, data.groups, month, year)
     if (fee <= 0) return
     if (studentPaidForMonth(data.payments, s.id, month, year, fee)) paid += 1
     else unpaid += 1
@@ -198,7 +198,7 @@ export function getTodayAttendancePercent(data, date) {
 
 export function getDebtorCount(data, month, year) {
   return data.students.filter(
-    (s) => isStudentDebtor(data.payments, s.id, month, year, s.monthlyFee),
+    (s) => isStudentDebtor(data.payments, s.id, month, year, studentMonthlyFee(s, data.groups, month, year)),
   ).length
 }
 

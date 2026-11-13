@@ -48,14 +48,18 @@ export default function Select({
     if (!btn) return
     const rect = btn.getBoundingClientRect()
     const viewportH = window.innerHeight
+    const viewportW = document.documentElement.clientWidth
     const spaceBelow = viewportH - rect.bottom
     const openUp = spaceBelow < 220 && rect.top > spaceBelow
+    const width = Math.min(Math.max(rect.width, 140), viewportW - 16)
     setMenuStyle({
       position: 'fixed',
-      left: rect.left,
-      width: Math.max(rect.width, 140),
+      left: Math.max(8, Math.min(rect.left, viewportW - width - 8)),
+      width,
       top: openUp ? undefined : rect.bottom + 6,
       bottom: openUp ? viewportH - rect.top + 6 : undefined,
+      // Never taller than the room on that side, otherwise the last options sit off-screen.
+      maxHeight: Math.max(120, Math.min(280, (openUp ? rect.top : spaceBelow) - 14)),
       zIndex: 1400,
     })
   }

@@ -43,6 +43,7 @@ function buildNav(base, { ownerAccount = false } = {}) {
         { to: `${base}/teachers`, labelKey: 'nav.teachers', icon: HardHat },
         { to: `${base}/students`, labelKey: 'nav.students', icon: GraduationCap },
         { to: `${base}/schedule`, labelKey: 'nav.schedule', icon: CalendarDays },
+        { to: `${base}/attendance`, labelKey: 'nav.attendance', icon: ClipboardCheck, end: true },
       ],
     },
     {
@@ -116,7 +117,7 @@ const BOTTOM_NAV = {
     { to: '/owner', labelKey: 'nav.home', end: true, icon: Home },
     { to: '/owner/groups', labelKey: 'nav.groups', icon: Users },
     { to: '/owner/students', labelKey: 'nav.students', icon: GraduationCap },
-    { to: '/owner/finance', labelKey: 'nav.financeSummary', icon: ChartColumn },
+    { to: '/owner/finance', labelKey: 'nav.finance', icon: ChartColumn },
     { to: '/owner/questions', labelKey: 'nav.questions', icon: MessageCircle },
   ],
   reception: [
@@ -133,7 +134,7 @@ const PAGE_TITLES = [
   { match: /\/settings\/fon/, titleKey: 'nav.appearance' },
   { match: /\/settings\/staff/, titleKey: 'nav.staff' },
   { match: /\/attendance\/absent-today/, titleKey: 'owner.absentToday.title' },
-  { match: /\/teacher\/attendance/, titleKey: 'nav.attendance' },
+  { match: /\/attendance\/?$/, titleKey: 'nav.attendance' },
   { match: /\/teacher\/groups/, titleKey: 'nav.myGroups' },
   { match: /\/finance\/debtors/, titleKey: 'nav.debtors' },
   { match: /\/payments\/debtors/, titleKey: 'nav.debtors' },
@@ -239,22 +240,19 @@ export default function AppShell({ role }) {
       return Boolean(el.closest('input, textarea, select, [contenteditable="true"]'))
     }
 
-    const homePath = `/${role}`
-
     const onKeyDown = (e) => {
       if (e.repeat) return
 
       if (e.key === 'Escape') {
-        // Modal o‘zi Esc ni ushlaydi
+        // Modal o‘zi Esc ni ushlaydi; bu yerda faqat mobil menyuni yopamiz.
         if (document.querySelector('.modal-backdrop')) return
-        e.preventDefault()
         setMobileNavOpen(false)
-        const atHome = pathname === homePath || pathname === `${homePath}/`
-        if (!atHome) navigate(homePath)
         return
       }
 
-      if (e.key !== 'Tab' || e.shiftKey || e.altKey || e.ctrlKey || e.metaKey) return
+      // Tab klaviatura bilan fokusni ko‘chirish uchun kerak — uni egallamaymiz.
+      // Menyuni ochish/yopish: Ctrl + \ (yoki ⌘ + \).
+      if (e.key !== '\\' || !(e.ctrlKey || e.metaKey) || e.altKey || e.shiftKey) return
       if (isTypingTarget(document.activeElement)) return
       e.preventDefault()
       if (window.matchMedia('(min-width: 1025px)').matches) {
@@ -274,7 +272,7 @@ export default function AppShell({ role }) {
 
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [navigate, pathname, role])
+  }, [])
 
   useEffect(() => {
     const frame = requestAnimationFrame(() => {

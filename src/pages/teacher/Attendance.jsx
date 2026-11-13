@@ -13,11 +13,18 @@ import {
 } from '../../lib/analytics'
 import { groupsForTeacher } from '../../lib/store'
 import { formatPhone } from '../../lib/utils'
+import { useDialog } from '../../context/DialogContext'
+import AttendanceSourceTag from '../../components/face/AttendanceSourceTag.jsx'
+import { useSiteFaceLabels } from '../../components/face/useSiteFaceLabels.js'
+import { isFaceLockedError } from '../../lib/faceApi.js'
 
 export default function TeacherAttendance() {
   const { user } = useAuth()
   const { data, markAttendance } = useData()
   const { t } = useLanguage()
+  const { confirm } = useDialog()
+  const faceLabels = useSiteFaceLabels()
+  const [manualOpen, setManualOpen] = useState(false)
   const navigate = useNavigate()
   const [searchParams, setSearchParams] = useSearchParams()
   const groups = useMemo(
@@ -27,6 +34,7 @@ export default function TeacherAttendance() {
   const date = getTashkentDateISO()
   const [notes, setNotes] = useState({})
   const [savingId, setSavingId] = useState(null)
+  const [saveError, setSaveError] = useState('')
 
   const groupId = searchParams.get('group') || groups[0]?.id || ''
   const selectedGroup = data.groups.find((g) => g.id === groupId)
@@ -61,38 +69,48 @@ export default function TeacherAttendance() {
 
   const getStatus = (studentId) => getRecord(studentId)?.status
 
-  const setStatus = async (studentId, status) => {
-    if (!hasLessonToday) return
+  const save = async (studentId, status, note) => {
+    if (!hasLessonToday || savingId) return
+    const record = getRecord(studentId)
+    const askOverride = () => confirm({
+      message: faceLabels.overrideConfirm(),
+      confirmLabel: faceLabels.overrideAction(),
+      tone: 'danger',
+    })
+    let overrideFace = false
+    if (record?.source === 'face' && record.checkedInAt) {
+      if (!(await askOverride())) return
+      overrideFace = true
+    }
     setSavingId(studentId)
+    setSaveError('')
     try {
-      await markAttendance({
-        studentId,
-        groupId,
-        status,
-        note: notes[studentId] ?? getRecord(studentId)?.note ?? '',
-        markedBy: user.id,
-      })
+      try {
+        await markAttendance({ studentId, groupId, status, note, markedBy: user.id, overrideFace })
+      } catch (lockError) {
+        if (overrideFace || !isFaceLockedError(lockError)) throw lockError
+        if (await askOverride()) await markAttendance({ studentId, groupId, status, note, markedBy: user.id, overrideFace: true })
+      }
+    } catch (err) {
+      const name = data.students.find((s) => s.id === studentId)?.name || ''
+      setSaveError(`${name ? `${name}: ` : ''}${err.message || t('domain.error.dataLoadFailed')}`)
     } finally {
       setSavingId(null)
     }
   }
 
-  const saveNote = async (studentId) => {
-    if (!hasLessonToday) return
+  const setStatus = (studentId, status) => save(
+    studentId,
+    status,
+    notes[studentId] ?? getRecord(studentId)?.note ?? '',
+  )
+
+  const saveNote = (studentId) => {
     const current = getStatus(studentId)
     if (!current) return
-    setSavingId(studentId)
-    try {
-      await markAttendance({
-        studentId,
-        groupId,
-        status: current,
-        note: notes[studentId] || '',
-        markedBy: user.id,
-      })
-    } finally {
-      setSavingId(null)
-    }
+    const nextNote = notes[studentId]
+    if (nextNote === undefined || nextNote === (getRecord(studentId)?.note ?? '')) return
+    return save(studentId, current, nextNote || '')
   }
 
   if (!user?.teacherId) {
@@ -164,6 +182,22 @@ export default function TeacherAttendance() {
           </div>
         </div>
 
+        {saveError && <div className="alert alert-error" role="alert">{saveError}</div>}
+
+        {hasLessonToday && students.length > 0 && (
+          <div className="attendance-toolbar-card">
+            <div className="attendance-toolbar-top">
+              <div className="attendance-toolbar-title">
+                <strong>{faceLabels.manualTitle()}</strong>
+                <span>{faceLabels.manualHint()}</span>
+              </div>
+              <button type="button" className="btn btn-outline btn-sm" aria-expanded={manualOpen} onClick={() => setManualOpen((value) => !value)}>
+                {manualOpen ? faceLabels.hideManual() : faceLabels.showManual()}
+              </button>
+            </div>
+          </div>
+        )}
+
         {!hasLessonToday ? (
           <EmptyState
             title={cancelledToday ? 'Dars bekor qilingan' : t('teacher.attendance.noLessonToday')}
@@ -185,17 +219,29 @@ export default function TeacherAttendance() {
                     <div className="attendance-phone">
                       {student.phone ? formatPhone(student.phone) : '—'}
                     </div>
-                    <input
-                      className="input attendance-note-input"
-                      placeholder={t('teacher.attendance.notePlaceholder')}
-                      value={noteValue}
-                      onChange={(e) => setNotes({ ...notes, [student.id]: e.target.value })}
-                      onBlur={() => saveNote(student.id)}
-                    />
+                    {getRecord(student.id) ? <AttendanceSourceTag record={getRecord(student.id)} labels={faceLabels} /> : null}
+                    {manualOpen && (
+                      <input
+                        className="input attendance-note-input"
+                        aria-label={`${student.name} — ${t('teacher.attendance.notePlaceholder')}`}
+                        placeholder={t('teacher.attendance.notePlaceholder')}
+                        value={noteValue}
+                        onChange={(e) => setNotes({ ...notes, [student.id]: e.target.value })}
+                        onBlur={() => saveNote(student.id)}
+                      />
+                    )}
                   </div>
-                  <div className="attendance-actions">
+                  {!manualOpen ? (
+                    <div className="attendance-actions">
+                      <span className={`status-btn${status ? ` active-${status}` : ''}`}>
+                        {status ? t(`teacher.attendance.${status}`) : '—'}
+                      </span>
+                    </div>
+                  ) : <div className="attendance-actions">
                     <button
                       type="button"
+                      disabled={Boolean(savingId)}
+                      aria-pressed={status === 'present'}
                       className={`status-btn${status === 'present' ? ' active-present' : ''}`}
                       onClick={() => setStatus(student.id, 'present')}
                     >
@@ -203,6 +249,8 @@ export default function TeacherAttendance() {
                     </button>
                     <button
                       type="button"
+                      disabled={Boolean(savingId)}
+                      aria-pressed={status === 'late'}
                       className={`status-btn${status === 'late' ? ' active-late' : ''}`}
                       onClick={() => setStatus(student.id, 'late')}
                     >
@@ -210,12 +258,14 @@ export default function TeacherAttendance() {
                     </button>
                     <button
                       type="button"
+                      disabled={Boolean(savingId)}
+                      aria-pressed={status === 'absent'}
                       className={`status-btn${status === 'absent' ? ' active-absent' : ''}`}
                       onClick={() => setStatus(student.id, 'absent')}
                     >
                       {t('teacher.attendance.absent')}
                     </button>
-                  </div>
+                  </div>}
                 </div>
               )
             })}

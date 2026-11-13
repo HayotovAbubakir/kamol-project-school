@@ -10,6 +10,7 @@ import {
   undoScheduleChange,
 } from '../lib/api'
 import { getEffectiveLesson } from '../../shared/schedule.js'
+import { translate as tr } from '../i18n/runtime'
 
 const WEEKDAYS = [
   'Dushanba', 'Seshanba', 'Chorshanba', 'Payshanba',
@@ -154,7 +155,7 @@ export default function ScheduleChangeDialog({ group, initialSlotId = '', onClos
 
   const save = async () => {
     if (!preview || JSON.stringify(preview.payload) !== JSON.stringify(payload())) {
-      setError('Avval o‘zgarishni tekshiring.')
+      setError(tr('Avval o‘zgarishni tekshiring.'))
       return
     }
     setBusy(true)
@@ -162,7 +163,7 @@ export default function ScheduleChangeDialog({ group, initialSlotId = '', onClos
     try {
       await createScheduleChange(preview.payload)
       await refresh()
-      setNotice('Jadval o‘zgarishi saqlandi va xabarnomalar navbatga qo‘yildi.')
+      setNotice(tr('Jadval o‘zgarishi saqlandi va xabarnomalar navbatga qo‘yildi.'))
       const result = await scheduleHistory(group.id)
       setHistory(result)
       onClose()
@@ -180,7 +181,7 @@ export default function ScheduleChangeDialog({ group, initialSlotId = '', onClos
       await undoScheduleChange(changeId)
       await refresh()
       setHistory(await scheduleHistory(group.id))
-      setNotice('O‘zgarish qaytarildi. Xabarnomalar yuboriladi.')
+      setNotice(tr('O‘zgarish qaytarildi. Xabarnomalar yuboriladi.'))
     } catch (err) {
       setError(err.message || 'O‘zgarishni qaytarib bo‘lmadi.')
     } finally {
@@ -194,7 +195,7 @@ export default function ScheduleChangeDialog({ group, initialSlotId = '', onClos
     try {
       await resendScheduleNotification(notificationId)
       setHistory(await scheduleHistory(group.id))
-      setNotice('Xabarnoma qayta yuborish navbatiga qo‘yildi.')
+      setNotice(tr('Xabarnoma qayta yuborish navbatiga qo‘yildi.'))
     } catch (err) {
       setError(err.message || 'Xabarnomani qayta yuborib bo‘lmadi.')
     } finally {
@@ -219,23 +220,23 @@ export default function ScheduleChangeDialog({ group, initialSlotId = '', onClos
       size="lg"
       actions={(
         <div className="schedule-change-actions">
-          <button type="button" className="btn btn-outline" onClick={onClose}>Yopish</button>
+          <button type="button" className="btn btn-outline" onClick={onClose}>{tr('Yopish')}</button>
           <button type="button" className="btn btn-outline" disabled={busy || reason.trim().length < 3 || !selectedSlot} onClick={updatePreview}>
-            {busy ? 'Tekshirilmoqda…' : 'Oldindan ko‘rish'}
+            {busy ? tr('Tekshirilmoqda…') : tr('Oldindan ko‘rish')}
           </button>
           <button type="button" className="btn btn-primary" disabled={busy || !previewMatches} onClick={save}>
-            {busy ? 'Saqlanmoqda…' : 'Saqlash'}
+            {busy ? tr('Saqlanmoqda…') : tr('Saqlash')}
           </button>
         </div>
       )}
     >
       <div className="schedule-change-dialog">
-        <div className="schedule-change-tabs" role="tablist" aria-label="O‘zgarish turi">
+        <div className="schedule-change-tabs" role="tablist" aria-label={tr('O‘zgarish turi')}>
           <button type="button" className={mode === 'single' ? 'is-active' : ''} onClick={() => changeField(setMode, 'single')}>
-            Faqat bir kun uchun
+           {tr('Faqat bir kun uchun')}
           </button>
           <button type="button" className={mode === 'permanent' ? 'is-active' : ''} onClick={() => changeField(setMode, 'permanent')}>
-            Shu sanadan boshlab davomiy
+           {tr('Shu sanadan boshlab davomiy')}
           </button>
         </div>
 
@@ -243,17 +244,17 @@ export default function ScheduleChangeDialog({ group, initialSlotId = '', onClos
           {mode === 'single' ? (
             <>
               <label>
-                <span>Dars sanasi</span>
+                <span>{tr('Dars sanasi')}</span>
                 <input className="input" type="date" min={today} value={date}
                   onChange={(event) => { changeField(setDate, event.target.value); setSlotId('') }} />
               </label>
               <button type="button" className="btn btn-outline" onClick={() => { changeField(setDate, tomorrow); setSlotId('') }}>
-                Ertangi kun
+               {tr('Ertangi kun')}
               </button>
               <label>
-                <span>Dars</span>
+                <span>{tr('Dars')}</span>
                 <select className="input" value={slotId} onChange={(event) => changeField(setSlotId, event.target.value)}>
-                  <option value="">Darsni tanlang</option>
+                  <option value="">{tr('Darsni tanlang')}</option>
                   {slots.map((slot, index) => {
                     const id = String(slot.slotId || `slot-${index}`)
                     return <option key={id} value={id}>{slot.startTime}–{slot.endTime}</option>
@@ -261,48 +262,48 @@ export default function ScheduleChangeDialog({ group, initialSlotId = '', onClos
                 </select>
               </label>
               <label>
-                <span>Amal</span>
+                <span>{tr('Amal')}</span>
                 <select className="input" value={action} onChange={(event) => changeField(setAction, event.target.value)}>
-                  <option value="change">Vaqt yoki sanani o‘zgartirish</option>
-                  <option value="cancel">Darsni bekor qilish</option>
+                  <option value="change">{tr('Vaqt yoki sanani o‘zgartirish')}</option>
+                  <option value="cancel">{tr('Darsni bekor qilish')}</option>
                 </select>
               </label>
               {action === 'change' ? (
                 <>
-                  <label><span>Yangi sana</span><input className="input" type="date" min={today} value={newDate}
+                  <label><span>{tr('Yangi sana')}</span><input className="input" type="date" min={today} value={newDate}
                     onChange={(event) => changeField(setNewDate, event.target.value)} /></label>
-                  <label><span>Boshlanish vaqti</span><input className="input" type="time" value={startTime}
+                  <label><span>{tr('Boshlanish vaqti')}</span><input className="input" type="time" value={startTime}
                     onChange={(event) => changeField(setStartTime, event.target.value)} /></label>
-                  <label><span>Tugash vaqti</span><input className="input" type="time" value={endTime}
+                  <label><span>{tr('Tugash vaqti')}</span><input className="input" type="time" value={endTime}
                     onChange={(event) => changeField(setEndTime, event.target.value)} /></label>
                 </>
               ) : null}
             </>
           ) : (
             <>
-              <label><span>O‘zgarish kuchga kiradigan sana</span><input className="input" type="date" min={today}
+              <label><span>{tr('O‘zgarish kuchga kiradigan sana')}</span><input className="input" type="date" min={today}
                 value={validFrom} onChange={(event) => { changeField(setValidFrom, event.target.value); setSlotId('') }} /></label>
-              <label><span>Jadvaldagi dars</span>
+              <label><span>{tr('Jadvaldagi dars')}</span>
                 <select className="input" value={slotId} onChange={(event) => changeField(setSlotId, event.target.value)}>
-                  <option value="">Darsni tanlang</option>
+                  <option value="">{tr('Darsni tanlang')}</option>
                   {schedule.map((slot, index) => {
                     const id = String(slot.slotId || `slot-${index}`)
                     return <option key={id} value={id}>{WEEKDAYS[Number(slot.day) - 1]} · {slot.startTime}–{slot.endTime}</option>
                   })}
                 </select>
               </label>
-              <label><span>Hafta kuni</span><select className="input" value={day} onChange={(event) => changeField(setDay, Number(event.target.value))}>
+              <label><span>{tr('Hafta kuni')}</span><select className="input" value={day} onChange={(event) => changeField(setDay, Number(event.target.value))}>
                 {WEEKDAYS.map((name, index) => <option key={name} value={index + 1}>{name}</option>)}
               </select></label>
-              <label><span>Boshlanish vaqti</span><input className="input" type="time" value={startTime}
+              <label><span>{tr('Boshlanish vaqti')}</span><input className="input" type="time" value={startTime}
                 onChange={(event) => changeField(setStartTime, event.target.value)} /></label>
-              <label><span>Tugash vaqti</span><input className="input" type="time" value={endTime}
+              <label><span>{tr('Tugash vaqti')}</span><input className="input" type="time" value={endTime}
                 onChange={(event) => changeField(setEndTime, event.target.value)} /></label>
             </>
           )}
-          <label className="schedule-change-reason"><span>Sabab</span>
+          <label className="schedule-change-reason"><span>{tr('Sabab')}</span>
             <textarea className="input" rows="2" maxLength="500" value={reason}
-              onChange={(event) => changeField(setReason, event.target.value)} placeholder="O‘zgarish sababini yozing" />
+              onChange={(event) => changeField(setReason, event.target.value)} placeholder={tr('O‘zgarish sababini yozing')} />
           </label>
         </div>
 
@@ -310,21 +311,21 @@ export default function ScheduleChangeDialog({ group, initialSlotId = '', onClos
         {notice ? <p className="schedule-change-notice" role="status">{notice}</p> : null}
         {previewMatches ? (
           <section className="schedule-change-preview" aria-live="polite">
-            <h3>Saqlashdan oldingi ko‘rinish</h3>
+            <h3>{tr('Saqlashdan oldingi ko‘rinish')}</h3>
             <p><strong>Avval:</strong> {lessonSummary(preview.oldLesson)}</p>
             <p><strong>Keyin:</strong> {preview.newLesson?.status === 'cancelled'
-              ? 'Dars bekor qilinadi'
+              ? tr('Dars bekor qilinadi')
               : mode === 'permanent'
                 ? `${WEEKDAYS[Number(preview.newLesson?.day) - 1] || '—'} · ${preview.newLesson?.startTime}–${preview.newLesson?.endTime}`
                 : `${lessonSummary(preview.newLesson)}${preview.newLesson?.newDate ? ` (ko‘chiriladi)` : ''}`}</p>
-            <p>Xabarnoma oluvchilar: <strong>{preview.notificationCount}</strong></p>
-            <StatusBadge tone="success">To‘qnashuv aniqlanmadi</StatusBadge>
+            <p>{tr('Xabarnoma oluvchilar:')} <strong>{preview.notificationCount}</strong></p>
+            <StatusBadge tone="success">{tr('To‘qnashuv aniqlanmadi')}</StatusBadge>
           </section>
         ) : null}
 
         <section className="schedule-change-history">
-          <h3>O‘zgarishlar tarixi</h3>
-          {loadingHistory ? <p>Yuklanmoqda…</p> : changeEvents.length === 0 ? <p>Hozircha o‘zgarish yo‘q.</p> : (
+          <h3>{tr('O‘zgarishlar tarixi')}</h3>
+          {loadingHistory ? <p>{tr('Yuklanmoqda…')}</p> : changeEvents.length === 0 ? <p>{tr('Hozircha o‘zgarish yo‘q.')}</p> : (
             changeEvents.map((event) => {
               const details = (() => {
                 try { return JSON.parse(event.details || '{}') } catch { return {} }
@@ -333,23 +334,23 @@ export default function ScheduleChangeDialog({ group, initialSlotId = '', onClos
               const deliveries = deliveryByChange.get(event.change_id) || []
               return (
                 <article key={event.id} className="schedule-change-history-item">
-                  <div><strong>{details.reason || 'Sabab ko‘rsatilmagan'}</strong>
-                    <span>{event.actor_name || 'Xodim'} · {new Date(event.created_at).toLocaleString('uz-UZ', { timeZone: 'Asia/Tashkent' })}</span>
+                  <div><strong>{details.reason || tr('Sabab ko‘rsatilmagan')}</strong>
+                    <span>{event.actor_name || tr('Xodim')} · {new Date(event.created_at).toLocaleString('uz-UZ', { timeZone: 'Asia/Tashkent' })}</span>
                   </div>
                   {isActive && canUndo(user?.role) ? (
                     <button type="button" className="btn btn-outline btn-sm" disabled={busy} onClick={() => undo(event.change_id)}>
-                      Qaytarish
+                     {tr('Qaytarish')}
                     </button>
                   ) : null}
                   {deliveries.map((delivery) => (
                     <div className="schedule-change-delivery" key={delivery.id}>
-                      <span>{delivery.recipient_name || 'Foydalanuvchi'} · {delivery.channel === 'telegram' ? 'Telegram' : 'Ilova'}</span>
+                      <span>{delivery.recipient_name || tr('Foydalanuvchi')} · {delivery.channel === 'telegram' ? 'Telegram' : tr('Ilova')}</span>
                       <StatusBadge tone={delivery.status === 'sent' ? 'success' : delivery.status === 'failed' ? 'danger' : 'warning'}>
-                        {delivery.status === 'sent' ? 'Yuborildi' : delivery.status === 'failed' ? 'Xato' : delivery.status === 'not_linked' ? 'Ulanmagan' : 'Navbatda'}
+                        {delivery.status === 'sent' ? tr('Yuborildi') : delivery.status === 'failed' ? tr('Xato') : delivery.status === 'not_linked' ? tr('Ulanmagan') : tr('Navbatda')}
                       </StatusBadge>
                       {delivery.status === 'failed' && user?.role !== 'teacher' ? (
                         <button type="button" className="btn btn-outline btn-sm" disabled={busy}
-                          onClick={() => resend(delivery.id)}>Qayta yuborish</button>
+                          onClick={() => resend(delivery.id)}>{tr('Qayta yuborish')}</button>
                       ) : null}
                     </div>
                   ))}

@@ -4,9 +4,15 @@ const STATUS = {
   absent: 'Kelmadi',
 }
 
+const METHOD = {
+  cash: 'naqd',
+  card: 'karta',
+  transfer: 'o‘tkazma',
+}
+
 export function formatMoney(amount) {
   const n = Math.round(Number(amount) || 0)
-  return `${n.toLocaleString('uz-UZ')} so'm`
+  return `${n.toLocaleString('uz-UZ')} so‘m`
 }
 
 export function formatDateTime(iso) {
@@ -24,26 +30,27 @@ export function formatDateTime(iso) {
   }).format(d)
 }
 
+const MONTHS = ['Yanvar', 'Fevral', 'Mart', 'Aprel', 'May', 'Iyun', 'Iyul', 'Avgust', 'Sentabr', 'Oktabr', 'Noyabr', 'Dekabr']
+
+export function monthLabel(month) {
+  return MONTHS[Number(month) - 1] || String(month)
+}
+
+function formatDateOnly(value) {
+  const [year, month, day] = String(value || '').slice(0, 10).split('-')
+  return year && month && day ? `${day}.${month}.${year}` : String(value || '—')
+}
+
 export function menuText() {
-  return [
-    'Pastdagi tugmalardan tanlang:',
-    '• Holat — shu oy to‘lov va guruhlar',
-    '• Jadval — yaqin 14 kun dars jadvali',
-    '• Davomat — oxirgi 14 kun',
-    '• To‘lovlar tarixi — barcha to‘lovlar',
-    '• Uzish — bog‘lashni uzish',
-  ].join('\n')
+  return 'Kerakli bo‘limni tanlang.'
 }
 
 export function welcomeAskCode() {
   return [
-    'Assalomu alaykum!',
-    'Bu Kamol School ota-ona boti.',
+    'Assalomu alaykum! Kamol School boti.',
     '',
-    'Farzandingizning o‘quvchi ID sini yuboring.',
-    'Masalan: KS-A7F2K9',
-    '',
-    'ID ni maktab Qabulxonasidan olishingiz mumkin.',
+    'Farzandingizning o‘quvchi ID raqamini yuboring.',
+    'Masalan: KS-A7F2C9',
   ].join('\n')
 }
 
@@ -66,118 +73,84 @@ export function alreadyLinked(student) {
 }
 
 export function codeNotFound() {
-  return 'Bunday o‘quvchi ID topilmadi. Qayta tekshirib yuboring (masalan KS-A7F2K9).'
+  return 'Bunday ID topilmadi. Tekshirib, qayta yuboring. Masalan: KS-A7F2C9'
 }
 
 export function needLink() {
-  return 'Avval o‘quvchi ID sini yuboring. /start ni bosing.'
+  return 'Avval o‘quvchi ID raqamini yuboring. Boshlash: /start'
 }
 
 export function unlinked() {
-  return 'Bog‘lash uzildi. Qayta ulash uchun /start bosing va yangi ID yuboring.'
+  return 'Bog‘lanish uzildi. Qayta ulash: /start'
 }
 
 export function statusText({ student, groups, expected, paid, remaining, month, year }) {
   const groupLines = groups.length
-    ? groups.map((g) => `• ${g.name} — oylik ${formatMoney(g.monthly_fee)}`).join('\n')
-    : '• Guruhga biriktirilmagan'
+    ? groups.map((g) => `• ${g.name} — ${formatMoney(g.monthly_fee)}`).join('\n')
+    : '• Guruh yo‘q'
   return [
-    `Holat: ${student.name}`,
-    `Oy: ${month}.${year}`,
+    `${student.name} · ${monthLabel(month)} ${year}`,
     '',
-    'Guruhlar:',
     groupLines,
     '',
-    `Jami kerak: ${formatMoney(expected)}`,
+    `Kerak: ${formatMoney(expected)}`,
     `To‘langan: ${formatMoney(paid)}`,
-    `Qoldiq: ${formatMoney(remaining)}`,
+    remaining > 0 ? `Qarz: ${formatMoney(remaining)}` : 'To‘liq to‘langan ✅',
   ].join('\n')
 }
 
 export function attendanceText(rows) {
-  if (!rows.length) return 'Oxirgi 14 kunda davomat yozuvi yo‘q.'
+  if (!rows.length) return 'Oxirgi 14 kunda davomat yo‘q.'
   const lines = rows.map((row) => {
     const status = STATUS[row.status] || row.status
     const group = row.groups?.name || '—'
-    return `${row.date} — ${status} (${group})`
+    return `${formatDateOnly(row.date)} — ${status} (${group})${row.note ? `\n  Izoh: ${row.note}` : ''}`
   })
-  return ['Oxirgi 14 kun davomat:', ...lines].join('\n')
+  return ['Davomat · 14 kun', '', ...lines].join('\n')
 }
 
 export function scheduleText(rows) {
-  if (!rows.length) return 'Yaqin 14 kunda dars jadvali yo‘q.'
+  if (!rows.length) return 'Yaqin 14 kunda dars yo‘q.'
   const weekdays = ['Yakshanba', 'Dushanba', 'Seshanba', 'Chorshanba', 'Payshanba', 'Juma', 'Shanba']
   const lines = rows.map((lesson) => {
     const date = lesson.date || ''
     const parsedDate = new Date(`${date}T12:00:00Z`)
     const weekday = Number.isNaN(parsedDate.getTime()) ? '' : weekdays[parsedDate.getUTCDay()]
-    const [year, month, day] = date.split('-')
-    const dateLabel = year && month && day ? `${day}.${month}.${year}` : date
     const status = lesson.status === 'cancelled'
       ? ' · BEKOR QILINGAN'
-      : lesson.status === 'changed' ? ' · O‘ZGARTIRILGAN' : ''
-    return `• ${dateLabel} (${weekday}) · ${lesson.startTime || '—'}–${lesson.endTime || '—'} · ${lesson.groupName}${status}${lesson.reason ? `\n  Sabab: ${lesson.reason}` : ''}`
+      : lesson.status === 'rescheduled'
+        ? ` · KO‘CHIRILDI${lesson.newDate ? ` → ${formatDateOnly(lesson.newDate)}` : ''}`
+        : lesson.status === 'changed' ? ' · O‘ZGARTIRILGAN' : ''
+    return `• ${formatDateOnly(date)} (${weekday}) · ${lesson.startTime || '—'}–${lesson.endTime || '—'} · ${lesson.groupName}${status}${lesson.reason ? `\n  Sabab: ${lesson.reason}` : ''}`
   })
-  return ['Yaqin 14 kun dars jadvali:', ...lines].join('\n')
+  return ['Jadval · 14 kun', '', ...lines].join('\n')
 }
 
-/** To‘lovni guruh oyliklariga proporsional taqsimlash */
-function splitPaymentByGroups(amount, groups) {
-  const list = Array.isArray(groups) ? groups : []
-  const totalFee = list.reduce((sum, g) => sum + (Number(g.monthly_fee) || 0), 0)
-  if (!list.length || totalFee <= 0) {
-    return [{ name: 'Umumiy', share: amount }]
-  }
-  return list.map((g) => {
-    const fee = Number(g.monthly_fee) || 0
-    const share = amount * (fee / totalFee)
-    return { name: g.name, share, fee }
-  })
-}
-
-export function paymentsText(rows, groups = []) {
-  if (!rows.length) return 'Hali to‘lov yozuvi yo‘q.'
-
+/** To‘lov yozuvida guruh saqlanmaydi — faqat qaysi oy uchun va qanday to‘langani ko‘rsatiladi. */
+export function paymentsText(rows) {
+  if (!rows.length) return 'To‘lov yo‘q.'
   const total = rows.reduce((sum, row) => sum + (Number(row.amount) || 0), 0)
-  const blocks = rows.map((row, index) => {
-    const amount = Number(row.amount) || 0
-    const shares = splitPaymentByGroups(amount, groups)
-    const shareLines = shares
-      .map((s) => `   → ${s.name}: ${formatMoney(s.share)}`)
-      .join('\n')
-    return [
-      `${index + 1}) ${formatDateTime(row.paid_at)}`,
-      `   Summa: ${formatMoney(amount)}`,
-      `   Oy: ${row.month}.${row.year}`,
-      '   Guruhlar bo‘yicha:',
-      shareLines,
-    ].join('\n')
+  const lines = rows.map((row) => {
+    const method = METHOD[row.method] ? ` (${METHOD[row.method]})` : ''
+    return `• ${String(row.month).padStart(2, '0')}.${row.year} — ${formatMoney(row.amount)}${method} · ${formatDateTime(row.paid_at).slice(0, 10)}`
   })
-
-  return [
-    'Jami to‘lovlar tarixi:',
-    `Jami: ${formatMoney(total)} (${rows.length} ta)`,
-    '',
-    ...blocks,
-  ].join('\n')
+  return [`To‘lovlar · jami ${formatMoney(total)}`, '', ...lines].join('\n')
 }
 
 export function attendancePush({ studentName, groupName, status, date, note }) {
   const label = STATUS[status] || status
   const parts = [
-    `Davomat: ${studentName}`,
-    `Sana: ${date}`,
-    `Guruh: ${groupName || '—'}`,
-    `Holat: ${label}`,
+    `${studentName} — ${label}`,
+    `${formatDateOnly(date)} · ${groupName || '—'}`,
   ]
-  if (note) parts.push(`Izoh: ${note}`)
+  if (note) parts.push(note)
   return parts.join('\n')
 }
 
 export function paymentPush({ studentName, amount, month, year }) {
   return [
-    `To‘lov qabul qilindi: ${studentName}`,
-    `Summa: ${formatMoney(amount)}`,
-    `Oy: ${month}.${year}`,
+    `To‘lov qabul qilindi ✅`,
+    `${studentName} — ${formatMoney(amount)}`,
+    `${monthLabel(month)} ${year}`,
   ].join('\n')
 }

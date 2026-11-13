@@ -24,6 +24,7 @@ import { groupsForTeacher } from '../../lib/store'
 import { MIN_PASSWORD_LENGTH } from '../../lib/cloudflare'
 import { staff as staffAccounts } from '../../lib/data/index.js'
 import { loginBaseFromName } from '../../../shared/account-credentials.js'
+import { translate as tr } from '../../i18n/runtime'
 
 const emptyForm = () => ({ firstName: '', lastName: '', phone: '', username: '', password: '', autoUsername: true })
 
@@ -224,7 +225,7 @@ export default function AdminTeachers() {
             onClick={() => openEdit(selected)}
             disabled={!login}
           >
-            <KeyRound size={14} /> Parolni tiklash
+            <KeyRound size={14} /> {tr('Parolni tiklash')}
           </button>
         </div>}
 

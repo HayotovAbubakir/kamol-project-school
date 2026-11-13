@@ -25,8 +25,12 @@ import { parseParentPhones, formatPhoneDisplay, isCompletePhone, isEmptyPhone, p
 import { changeStudentPassword, revealStudentPassword, unlinkStudentTelegram } from '../../lib/api'
 import { matchesSearch, studentSearchFields } from '../../lib/search'
 import { telegram } from '../../lib/data'
-import { currentMonthYear, formatMoney, formatPhone, joinPersonName, splitPersonName, todayISO } from '../../lib/utils'
+import { currentMonthYear, formatDate, formatMoney, formatPhone, joinPersonName, splitPersonName, todayISO } from '../../lib/utils'
 import { loginBaseFromName } from '../../../shared/account-credentials.js'
+import FaceCapture from '../../components/face/FaceCapture.jsx'
+import FacePhotosPanel from '../../components/face/FacePhotosPanel.jsx'
+import { useSiteFaceLabels } from '../../components/face/useSiteFaceLabels.js'
+import { faceApi } from '../../lib/faceApi.js'
 
 const emptyForm = () => ({
   firstName: '',
@@ -65,7 +69,11 @@ export default function AdminStudents() {
   const [revealedPassword, setRevealedPassword] = useState('')
   const [passwordOpen, setPasswordOpen] = useState(false)
   const [passwordForm, setPasswordForm] = useState({ username: '', password: '' })
+  const [passwordSaving, setPasswordSaving] = useState(false)
   const passwordTimer = useRef(null)
+  const faceLabels = useSiteFaceLabels()
+  const [faceShots, setFaceShots] = useState({})
+  const [faceCaptureKey, setFaceCaptureKey] = useState(0)
 
   const paidCount = useMemo(
     () => data.students.filter((s) => {
@@ -111,7 +119,8 @@ export default function AdminStudents() {
 
   async function saveStudentPassword(event) {
     event.preventDefault()
-    if (!selected) return
+    if (!selected || passwordSaving) return
+    setPasswordSaving(true)
     try {
       await changeStudentPassword(selected.id, passwordForm)
       setPasswordOpen(false)
@@ -120,6 +129,8 @@ export default function AdminStudents() {
       await alert({ message: 'O‘quvchi login va paroli yangilandi.' })
     } catch (passwordError) {
       setError(passwordError.message || 'Parolni o‘zgartirib bo‘lmadi.')
+    } finally {
+      setPasswordSaving(false)
     }
   }
 
@@ -229,6 +240,8 @@ export default function AdminStudents() {
     setEditingId(null)
     setError('')
     setForm(emptyForm())
+    setFaceShots({})
+    setFaceCaptureKey((value) => value + 1)
     setOpen(true)
   }
 
@@ -270,7 +283,11 @@ export default function AdminStudents() {
 
   const removePaymentRecord = async (payment) => {
     if (user?.role !== 'owner') return
-    const confirmed = await confirm({ message: 'Ushbu to‘lov yozuvini o‘chirmoqchimisiz?', confirmLabel: 'O‘chirish' })
+    const confirmed = await confirm({
+      message: `${formatMoney(payment.amount)} to‘lovni bekor qilmoqchimisiz? Yozuv tarixda “bekor qilingan” bo‘lib qoladi va qarzdorlik qayta hisoblanadi.`,
+      confirmLabel: 'Bekor qilish',
+      tone: 'danger',
+    })
     if (!confirmed) return
     try {
       await deletePayment(payment.id)
@@ -316,15 +333,24 @@ export default function AdminStudents() {
         fatherPhone: isEmptyPhone(form.fatherPhone) ? '' : form.fatherPhone,
         motherPhone: isEmptyPhone(form.motherPhone) ? '' : form.motherPhone,
         groupIds: form.groupIds,
-        joinedAt: todayISO(),
+        // Qo‘shilgan sana faqat yaratishda o‘rnatiladi; tahrirlash uni o‘zgartirmaydi.
+        ...(editingId ? {} : { joinedAt: todayISO() }),
       }
       if (editingId) {
         await updateStudent(editingId, payload)
       } else {
         const created = await addStudent(payload)
         if (created?.id) setSelectedId(created.id)
+        if (created?.id && Object.keys(faceShots).length) {
+          try {
+            await faceApi.uploadShots(created.id, faceShots)
+          } catch (faceError) {
+            await alert({ message: `${faceLabels.uploadFailed()}: ${faceError.message}`, tone: 'danger' })
+          }
+        }
       }
       setForm(emptyForm())
+      setFaceShots({})
       setOpen(false)
       setEditingId(null)
     } catch (err) {
@@ -509,6 +535,13 @@ export default function AdminStudents() {
             {inviteUrl ? <a className="mini-link" href={inviteUrl} target="_blank" rel="noreferrer">Havolani ochish</a> : null}
           </div>
 
+          <FacePhotosPanel
+            key={selected.id}
+            studentId={selected.id}
+            labels={faceLabels}
+            confirm={(message) => confirm({ message, confirmLabel: faceLabels.delete(), tone: 'danger' })}
+          />
+
           <section className="card" aria-label="To‘lovlar tarixi">
             <div className="card-header"><strong>To‘lovlar tarixi</strong></div>
             <div className="card-body">
@@ -519,13 +552,18 @@ export default function AdminStudents() {
                     .map((payment) => (
                       <div key={payment.id} className="flex flex-wrap items-center justify-between gap-2 border-b border-[var(--border)] py-2">
                         <div>
-                          <strong>{formatMoney(payment.amount)}</strong>
-                          <span className="ml-2 text-sm text-muted">{payment.month}/{payment.year} · {new Date(payment.paidAt).toLocaleDateString('uz-UZ')}</span>
+                          <strong className={payment.voidedAt ? 'line-through text-muted' : undefined}>{formatMoney(payment.amount)}</strong>
+                          <span className="ml-2 text-sm text-muted">{payment.month}/{payment.year} · {formatDate(payment.paidAt)}</span>
+                          {payment.voidedAt && (
+                            <StatusBadge tone="neutral">
+                              Bekor qilingan{payment.voidReason ? ` · ${payment.voidReason}` : ''}
+                            </StatusBadge>
+                          )}
                         </div>
-                        {user?.role === 'owner' && (
+                        {user?.role === 'owner' && !payment.voidedAt && (
                           <div className="flex gap-2">
                             <button type="button" className="btn btn-outline btn-sm" onClick={() => openPaymentEdit(payment)}>Tahrirlash</button>
-                            <button type="button" className="btn btn-outline btn-sm" onClick={() => removePaymentRecord(payment)}>O‘chirish</button>
+                            <button type="button" className="btn btn-outline btn-sm" onClick={() => removePaymentRecord(payment)}>Bekor qilish</button>
                           </div>
                         )}
                       </div>
@@ -747,6 +785,17 @@ export default function AdminStudents() {
               )}
             </div>
           </section>
+
+          {!editingId && (
+            <section className="form-section">
+              <header className="form-section-head">
+                <strong>{faceLabels.title()}</strong>
+                <span className="field-optional">({faceLabels.optional()})</span>
+              </header>
+              <p className="text-sm text-muted">{faceLabels.hint()}</p>
+              <FaceCapture key={faceCaptureKey} labels={faceLabels} onChange={setFaceShots} disabled={saving} />
+            </section>
+          )}
         </form>
       </Modal>
 
@@ -757,14 +806,16 @@ export default function AdminStudents() {
         actions={(
           <>
             <button type="button" className="btn btn-outline" onClick={() => { setPasswordOpen(false); setError('') }}>{t('common.cancel')}</button>
-            <button type="submit" form="student-password-form" className="btn btn-primary">Saqlash</button>
+            <button type="submit" form="student-password-form" className="btn btn-primary" disabled={passwordSaving}>
+              {passwordSaving ? t('common.saving') : 'Saqlash'}
+            </button>
           </>
         )}
       >
         {error && passwordOpen && <div className="alert alert-error">{error}</div>}
         <form id="student-password-form" onSubmit={saveStudentPassword} className="entity-form">
-          <div className="field"><label>Login</label><input className="input" value={passwordForm.username} onChange={(event) => setPasswordForm({ ...passwordForm, username: event.target.value })} required /></div>
-          <div className="field"><label>Yangi parol (kamida 6 belgi)</label><input type="password" className="input" value={passwordForm.password} onChange={(event) => setPasswordForm({ ...passwordForm, password: event.target.value })} minLength={6} autoComplete="new-password" required /></div>
+          <div className="field"><label htmlFor="student-password-login">Login</label><input id="student-password-login" className="input" value={passwordForm.username} onChange={(event) => setPasswordForm({ ...passwordForm, username: event.target.value })} required /></div>
+          <div className="field"><label htmlFor="student-password-new">Yangi parol (kamida 6 belgi)</label><input id="student-password-new" type="password" className="input" value={passwordForm.password} onChange={(event) => setPasswordForm({ ...passwordForm, password: event.target.value })} minLength={6} autoComplete="new-password" required /></div>
         </form>
       </Modal>
 

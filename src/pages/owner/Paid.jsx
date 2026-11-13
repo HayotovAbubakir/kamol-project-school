@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react'
 import { PageEnter } from '../../components/motion/PageMotion'
 import {
   Avatar,
+  EmptyState,
   MasterDetail,
   MasterListItem,
   StatusBadge,
@@ -19,7 +20,7 @@ export default function OwnerPaid() {
 
   const paidList = useMemo(() => {
     const monthPayments = data.payments.filter(
-      (p) => Number(p.month) === Number(month) && Number(p.year) === Number(year),
+      (p) => !p.voidedAt && Number(p.month) === Number(month) && Number(p.year) === Number(year),
     )
     const byKey = new Map()
 
@@ -74,7 +75,9 @@ export default function OwnerPaid() {
             <div className="master-list-head">
               <span className="chart-card-meta">{period}</span>
             </div>
-            {paidList.length === 0 ? null : paidList.map((item) => (
+            {paidList.length === 0 ? (
+              <EmptyState title={t('owner.paid.empty')} />
+            ) : paidList.map((item) => (
               <MasterListItem
                 key={item.id}
                 active={selectedId === item.id}
@@ -95,7 +98,7 @@ export default function OwnerPaid() {
         )}
         detail={
           !selected ? (
-            <div className="master-detail-empty">{t('owner.paid.select')}</div>
+            <div className="master-detail-empty">{paidList.length ? t('owner.paid.select') : t('owner.paid.empty')}</div>
           ) : (
             <>
               <div className="master-detail-head">

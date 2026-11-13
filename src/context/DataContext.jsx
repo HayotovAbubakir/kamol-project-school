@@ -27,8 +27,10 @@ export function DataProvider({ children }) {
   const [initialized, setInitialized] = useState(false)
   const [error, setError] = useState(null)
   const loadedForUser = useRef(null)
+  const requestSeq = useRef(0)
 
   const refresh = useCallback(async ({ soft = false } = {}) => {
+    const seq = ++requestSeq.current
     if (!userId || mustResetPassword) {
       setData(emptyData)
       setInitialized(true)
@@ -41,13 +43,18 @@ export function DataProvider({ children }) {
     setError(null)
     try {
       const next = await api.loadAll(userRole)
+      // Eski (sekin) javob yangi javob ustidan yozilmasin.
+      if (seq !== requestSeq.current) return
       setData(next)
       loadedForUser.current = userId
     } catch (err) {
+      if (seq !== requestSeq.current) return
       setError(err.message || translate('domain.error.dataLoadFailed'))
     } finally {
-      setLoading(false)
-      setInitialized(true)
+      if (seq === requestSeq.current) {
+        setLoading(false)
+        setInitialized(true)
+      }
     }
   }, [userId, userRole, mustResetPassword])
 

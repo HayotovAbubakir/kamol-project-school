@@ -18,6 +18,7 @@ export const ROLE_PERMISSIONS = Object.freeze({
       groups: ['select', 'insert', 'update'],
       students: ['select', 'insert', 'update'],
       group_students: manage,
+      group_fee_history: read,
       telegram_links: read,
       payments: ['select', 'insert', 'update'],
       payment_audit: read,
@@ -31,6 +32,7 @@ export const ROLE_PERMISSIONS = Object.freeze({
       'auth:staff', 'student:telegram-invite', 'homework:read', 'questions:inbox',
       'questions:reply', 'files:homework-access', 'files:all-homework', 'data:staff-wide-read',
       'data:reception-row-write', 'data:staff-wide-query', 'schedule:read', 'schedule:manage',
+      'face:manage',
     ]),
     pages: Object.freeze(['reception', 'students', 'groups', 'teachers', 'schedule', 'payments', 'attendance', 'homework', 'questions']),
     descriptions: Object.freeze([
@@ -40,6 +42,7 @@ export const ROLE_PERMISSIONS = Object.freeze({
       'To‘lov qabul qilish va to‘lov holatini ko‘rish',
       'O‘quvchiga Telegram ulash havolasi yaratish',
       'Savol-javoblar bilan ishlash',
+      'O‘quvchining Face ID rasmlarini olish va yangilash',
     ]),
   }),
   teacher: Object.freeze({
@@ -58,7 +61,7 @@ export const ROLE_PERMISSIONS = Object.freeze({
     pages: Object.freeze(['teacher', 'groups', 'attendance', 'schedule', 'homework', 'questions']),
     descriptions: Object.freeze([
       'Faqat biriktirilgan guruh va o‘quvchilar',
-      'Davomat belgilash',
+      'Davomat Face ID orqali; qo‘lda belgilash — zaxira usul',
       'Uy vazifasi yaratish va topshiriqlarni tekshirish',
       'Faqat o‘z guruhiga tegishli savol-ticketlarni ko‘rish va javob berish',
     ]),

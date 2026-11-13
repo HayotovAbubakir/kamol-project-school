@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { getEffectiveLesson } from '../../shared/schedule.js'
+import { t } from './i18n.js'
 import {
   createScheduleChange,
   loadScheduleChangeHistory,
@@ -30,12 +31,12 @@ function dateLabel(value) {
 
 function deliveryStatusLabel(status) {
   return ({
-    queued: 'Navbatda',
-    sending: 'Yuborilmoqda',
-    sent: 'Yuborildi',
-    failed: 'Xato',
-    not_linked: 'Telegram ulanmagan',
-  })[status] || 'Holati noma’lum'
+    queued: t('Navbatda'),
+    sending: t('Yuborilmoqda'),
+    sent: t('Yuborildi'),
+    failed: t('Xato'),
+    not_linked: t('Telegram ulanmagan'),
+  })[status] || t('Holati noma’lum')
 }
 
 function scheduleFor(group, date) {
@@ -58,6 +59,7 @@ export default function ScheduleChangeSheet({ group, role, initialSlotId = '', o
   const [mode, setMode] = useState('single')
   const [date, setDate] = useState(tomorrow)
   const [newDate, setNewDate] = useState(tomorrow)
+  const [pendingUndoId, setPendingUndoId] = useState('')
   const [validFrom, setValidFrom] = useState(tomorrow)
   const [slotId, setSlotId] = useState(initialSlotId)
   const [action, setAction] = useState('change')
@@ -83,7 +85,7 @@ export default function ScheduleChangeSheet({ group, role, initialSlotId = '', o
     let active = true
     loadScheduleChangeHistory(group.id)
       .then((result) => { if (active) setHistory(result) })
-      .catch((loadError) => { if (active) setError(loadError.message || 'Tarixni yuklab bo‘lmadi.') })
+      .catch((loadError) => { if (active) setError(loadError.message || t('Tarixni yuklab bo‘lmadi.')) })
       .finally(() => { if (active) setLoadingHistory(false) })
     return () => { active = false }
   }, [group.id])
@@ -130,7 +132,7 @@ export default function ScheduleChangeSheet({ group, role, initialSlotId = '', o
       setPreview({ ...result, payload: request, fingerprint: currentFingerprint })
     } catch (previewError) {
       setPreview(null)
-      setError(previewError.message || 'Jadvalni tekshirib bo‘lmadi.')
+      setError(previewError.message || t('Jadvalni tekshirib bo‘lmadi.'))
     } finally {
       setBusy(false)
     }
@@ -138,7 +140,7 @@ export default function ScheduleChangeSheet({ group, role, initialSlotId = '', o
 
   async function saveChange() {
     if (!previewMatches) {
-      setError('Avval o‘zgarishni tekshiring.')
+      setError(t('Avval o‘zgarishni tekshiring.'))
       return
     }
     setBusy(true)
@@ -148,7 +150,7 @@ export default function ScheduleChangeSheet({ group, role, initialSlotId = '', o
       await onSaved()
       onClose()
     } catch (saveError) {
-      setError(saveError.message || 'O‘zgarishni saqlab bo‘lmadi.')
+      setError(saveError.message || t('O‘zgarishni saqlab bo‘lmadi.'))
     } finally {
       setBusy(false)
     }
@@ -162,7 +164,7 @@ export default function ScheduleChangeSheet({ group, role, initialSlotId = '', o
       await onSaved()
       setHistory(await loadScheduleChangeHistory(group.id))
     } catch (undoError) {
-      setError(undoError.message || 'O‘zgarishni qaytarib bo‘lmadi.')
+      setError(undoError.message || t('O‘zgarishni qaytarib bo‘lmadi.'))
     } finally {
       setBusy(false)
     }
@@ -175,7 +177,7 @@ export default function ScheduleChangeSheet({ group, role, initialSlotId = '', o
       await resendScheduleNotification(id)
       setHistory(await loadScheduleChangeHistory(group.id))
     } catch (resendError) {
-      setError(resendError.message || 'Xabarnomani qayta yuborib bo‘lmadi.')
+      setError(resendError.message || t('Xabarnomani qayta yuborib bo‘lmadi.'))
     } finally {
       setBusy(false)
     }
@@ -196,93 +198,101 @@ export default function ScheduleChangeSheet({ group, role, initialSlotId = '', o
       <section className="mini-sheet" role="dialog" aria-modal="true" aria-labelledby="mini-schedule-title">
         <div className="mini-sheet-handle" />
         <header className="mini-sheet-header">
-          <h2 id="mini-schedule-title">Dars jadvali · {group.name}</h2>
-          <button type="button" className="mini-icon-button" aria-label="Yopish" onClick={onClose}>×</button>
+          <h2 id="mini-schedule-title">{t('Dars jadvali ·')} {group.name}</h2>
+          <button type="button" className="mini-icon-button" aria-label={t('Yopish')} onClick={onClose}>×</button>
         </header>
         <div className="mt-4 grid grid-cols-2 gap-2">
           <button type="button" className={`mini-secondary min-h-11 rounded-xl p-2 ${mode === 'single' ? 'ring-2 ring-[var(--mini-accent)]' : ''}`}
-            onClick={() => updateField('mode', 'single')}>Faqat bir kun</button>
+            onClick={() => updateField('mode', 'single')}>{t('Faqat bir kun')}</button>
           <button type="button" className={`mini-secondary min-h-11 rounded-xl p-2 ${mode === 'permanent' ? 'ring-2 ring-[var(--mini-accent)]' : ''}`}
-            onClick={() => updateField('mode', 'permanent')}>Davomiy</button>
+            onClick={() => updateField('mode', 'permanent')}>{t('Davomiy')}</button>
         </div>
         <div className="mt-3 grid gap-3">
           {mode === 'single' ? (
             <>
-              <label className="mini-field"><span>Dars sanasi</span><input type="date" min={today} value={date}
+              <label className="mini-field"><span>{t('Dars sanasi')}</span><input type="date" min={today} value={date}
                 onChange={(event) => { updateField('date', event.target.value); setSlotId('') }} /></label>
               <button type="button" className="mini-secondary min-h-11 rounded-xl px-3" onClick={() => {
                 updateField('date', tomorrow)
                 setSlotId('')
-              }}>Ertangi kun</button>
-              <label className="mini-field"><span>Dars</span><select value={slotId} onChange={(event) => updateField('slotId', event.target.value)}>
-                <option value="">Darsni tanlang</option>
+              }}>{t('Ertangi kun')}</button>
+              <label className="mini-field"><span>{t('Dars')}</span><select value={slotId} onChange={(event) => updateField('slotId', event.target.value)}>
+                <option value="">{t('Darsni tanlang')}</option>
                 {slots.map((slot, index) => <option key={slot.slotId || index} value={slot.slotId || `slot-${index}`}>{slot.startTime}–{slot.endTime}</option>)}
               </select></label>
-              <label className="mini-field"><span>Amal</span><select value={action} onChange={(event) => updateField('action', event.target.value)}>
-                <option value="change">Vaqt yoki sanani o‘zgartirish</option><option value="cancel">Darsni bekor qilish</option>
+              <label className="mini-field"><span>{t('Amal')}</span><select value={action} onChange={(event) => updateField('action', event.target.value)}>
+                <option value="change">{t('Vaqt yoki sanani o‘zgartirish')}</option><option value="cancel">{t('Darsni bekor qilish')}</option>
               </select></label>
               {action === 'change' && <>
-                <label className="mini-field"><span>Yangi sana</span><input type="date" min={today} value={newDate} onChange={(event) => updateField('newDate', event.target.value)} /></label>
-                <label className="mini-field"><span>Boshlanish vaqti</span><input type="time" value={startTime} onChange={(event) => updateField('startTime', event.target.value)} /></label>
-                <label className="mini-field"><span>Tugash vaqti</span><input type="time" value={endTime} onChange={(event) => updateField('endTime', event.target.value)} /></label>
+                <label className="mini-field"><span>{t('Yangi sana')}</span><input type="date" min={today} value={newDate} onChange={(event) => updateField('newDate', event.target.value)} /></label>
+                <label className="mini-field"><span>{t('Boshlanish vaqti')}</span><input type="time" value={startTime} onChange={(event) => updateField('startTime', event.target.value)} /></label>
+                <label className="mini-field"><span>{t('Tugash vaqti')}</span><input type="time" value={endTime} onChange={(event) => updateField('endTime', event.target.value)} /></label>
               </>}
             </>
           ) : <>
-            <label className="mini-field"><span>Kuchga kirish sanasi</span><input type="date" min={today} value={validFrom} onChange={(event) => { updateField('validFrom', event.target.value); setSlotId('') }} /></label>
-            <label className="mini-field"><span>Jadvaldagi dars</span><select value={slotId} onChange={(event) => updateField('slotId', event.target.value)}>
-              <option value="">Darsni tanlang</option>
+            <label className="mini-field"><span>{t('Kuchga kirish sanasi')}</span><input type="date" min={today} value={validFrom} onChange={(event) => { updateField('validFrom', event.target.value); setSlotId('') }} /></label>
+            <label className="mini-field"><span>{t('Jadvaldagi dars')}</span><select value={slotId} onChange={(event) => updateField('slotId', event.target.value)}>
+              <option value="">{t('Darsni tanlang')}</option>
               {schedule.map((slot, index) => <option key={slot.slotId || index} value={slot.slotId || `slot-${index}`}>{WEEKDAYS[Number(slot.day) - 1]} · {slot.startTime}–{slot.endTime}</option>)}
             </select></label>
-            <label className="mini-field"><span>Hafta kuni</span><select value={day} onChange={(event) => updateField('day', Number(event.target.value))}>
+            <label className="mini-field"><span>{t('Hafta kuni')}</span><select value={day} onChange={(event) => updateField('day', Number(event.target.value))}>
               {WEEKDAYS.map((name, index) => <option key={name} value={index + 1}>{name}</option>)}
             </select></label>
-            <label className="mini-field"><span>Boshlanish vaqti</span><input type="time" value={startTime} onChange={(event) => updateField('startTime', event.target.value)} /></label>
-            <label className="mini-field"><span>Tugash vaqti</span><input type="time" value={endTime} onChange={(event) => updateField('endTime', event.target.value)} /></label>
+            <label className="mini-field"><span>{t('Boshlanish vaqti')}</span><input type="time" value={startTime} onChange={(event) => updateField('startTime', event.target.value)} /></label>
+            <label className="mini-field"><span>{t('Tugash vaqti')}</span><input type="time" value={endTime} onChange={(event) => updateField('endTime', event.target.value)} /></label>
           </>}
-          <label className="mini-field"><span>Sabab</span><textarea rows="2" maxLength="500" value={reason}
-            onChange={(event) => updateField('reason', event.target.value)} placeholder="O‘zgarish sababini yozing" /></label>
+          <label className="mini-field"><span>{t('Sabab')}</span><textarea rows="2" maxLength="500" value={reason}
+            onChange={(event) => updateField('reason', event.target.value)} placeholder={t('O‘zgarish sababini yozing')} /></label>
         </div>
 
         {error && <p className="mini-error mt-3" role="alert">{error}</p>}
         {previewMatches && (
           <div className="mt-3 rounded-2xl border border-[var(--mini-border)] p-3 text-sm" aria-live="polite">
-            <strong>O‘zgarish oldindan ko‘rinishi</strong>
+            <strong>{t('O‘zgarish oldindan ko‘rinishi')}</strong>
             <p className="mt-2 text-[var(--mini-muted)]">Avval: {dateLabel(preview.oldLesson?.date)} · {preview.oldLesson?.startTime}–{preview.oldLesson?.endTime}</p>
             <p className="mt-1 text-[var(--mini-muted)]">Keyin: {preview.newLesson?.status === 'cancelled'
-              ? 'Dars bekor qilinadi'
+              ? t('Dars bekor qilinadi')
               : `${dateLabel(preview.newLesson?.newDate || preview.newLesson?.date)} · ${preview.newLesson?.startTime}–${preview.newLesson?.endTime}`}</p>
-            <p className="mt-1">Xabarnoma oluvchilar: <strong>{preview.notificationCount}</strong></p>
-            <p className="mt-1 text-xs text-emerald-500">To‘qnashuv aniqlanmadi</p>
+            <p className="mt-1">{t('Xabarnoma oluvchilar:')} <strong>{preview.notificationCount}</strong></p>
+            <p className="mt-1 text-xs text-emerald-500">{t('To‘qnashuv aniqlanmadi')}</p>
           </div>
         )}
         <div className="mt-3 flex flex-wrap gap-2">
-          <button type="button" className="mini-secondary min-h-11 flex-1 rounded-xl px-3" onClick={onClose}>Yopish</button>
+          <button type="button" className="mini-secondary min-h-11 flex-1 rounded-xl px-3" onClick={onClose}>{t('Yopish')}</button>
           <button type="button" className="mini-secondary min-h-11 flex-1 rounded-xl px-3"
             disabled={busy || reason.trim().length < 3 || !selectedSlot} onClick={checkChange}>
-            {busy ? 'Tekshirilmoqda…' : 'Tekshirish'}
+            {busy ? t('Tekshirilmoqda…') : t('Tekshirish')}
           </button>
-          <button type="button" className="min-h-11 flex-1 rounded-xl px-3 font-bold disabled:opacity-50"
-            disabled={busy || !previewMatches} onClick={saveChange}>Saqlash</button>
+          <button type="button" className="mini-action min-h-11 flex-1 rounded-xl px-3 font-bold disabled:opacity-50"
+            disabled={busy || !previewMatches} onClick={saveChange}>{busy ? t('Saqlanmoqda…') : t('Saqlash')}</button>
         </div>
 
         <details className="mt-5">
-          <summary className="min-h-11 cursor-pointer py-2 font-semibold">O‘zgarishlar tarixi</summary>
-          {loadingHistory ? <p className="py-2 text-sm text-[var(--mini-muted)]">Yuklanmoqda…</p>
-            : events.length === 0 ? <p className="py-2 text-sm text-[var(--mini-muted)]">Hozircha o‘zgarish yo‘q.</p>
+          <summary className="min-h-11 cursor-pointer py-2 font-semibold">{t('O‘zgarishlar tarixi')}</summary>
+          {loadingHistory ? <p className="py-2 text-sm text-[var(--mini-muted)]">{t('Yuklanmoqda…')}</p>
+            : events.length === 0 ? <p className="py-2 text-sm text-[var(--mini-muted)]">{t('Hozircha o‘zgarish yo‘q.')}</p>
               : events.map((event) => {
                 const eventDetails = (() => { try { return JSON.parse(event.details || '{}') } catch { return {} } })()
                 const active = !history.events.some((item) => item.change_id === event.change_id && item.event_type === 'reverted')
                 return (
                   <article key={event.id} className="border-t border-[var(--mini-border)] py-3 text-sm">
-                    <p className="font-semibold">{eventDetails.reason || 'Sabab ko‘rsatilmagan'}</p>
-                    <p className="text-xs text-[var(--mini-muted)]">{event.actor_name || 'Xodim'} · {dateLabel(event.created_at)}</p>
-                    {active && <button type="button" className="mini-secondary mt-2 min-h-11 rounded-xl px-3"
-                      disabled={busy} onClick={() => undo(event.change_id)}>Qaytarish</button>}
+                    <p className="font-semibold">{eventDetails.reason || t('Sabab ko‘rsatilmagan')}</p>
+                    <p className="text-xs text-[var(--mini-muted)]">{event.actor_name || t('Xodim')} · {dateLabel(event.created_at)}</p>
+                    {active && (pendingUndoId === event.change_id ? (
+                      <div className="mt-2 flex flex-wrap items-center gap-2" role="group" aria-label={t('Qaytarishni tasdiqlash')}>
+                        <span className="text-xs">{t('O‘quvchilarga yana xabar boradi. Qaytarilsinmi?')}</span>
+                        <button type="button" className="mini-danger min-h-11 rounded-xl px-3" disabled={busy}
+                          onClick={() => { setPendingUndoId(''); undo(event.change_id) }}>{t('Ha, qaytarish')}</button>
+                        <button type="button" className="mini-secondary min-h-11 rounded-xl px-3" disabled={busy}
+                          onClick={() => setPendingUndoId('')}>{t('Yo‘q')}</button>
+                      </div>
+                    ) : <button type="button" className="mini-secondary mt-2 min-h-11 rounded-xl px-3"
+                      disabled={busy} onClick={() => setPendingUndoId(event.change_id)}>{t('Qaytarish')}</button>)}
                     {(deliveries.get(event.change_id) || []).map((delivery) => (
                       <div key={delivery.id} className="mt-2 flex flex-wrap items-center gap-2 text-xs">
-                        <span>{delivery.recipient_name} · {delivery.channel === 'telegram' ? 'Telegram' : 'Ilova'} · {deliveryStatusLabel(delivery.status)}</span>
+                        <span>{delivery.recipient_name} · {delivery.channel === 'telegram' ? t('Telegram') : t('Ilova')} · {deliveryStatusLabel(delivery.status)}</span>
                         {delivery.status === 'failed' && role !== 'teacher' && <button type="button" className="mini-secondary min-h-11 rounded-xl px-3"
-                          disabled={busy} onClick={() => resend(delivery.id)}>Qayta yuborish</button>}
+                          disabled={busy} onClick={() => resend(delivery.id)}>{t('Qayta yuborish')}</button>}
                       </div>
                     ))}
                   </article>

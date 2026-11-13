@@ -1,8 +1,15 @@
-import { cloudflare } from '../lib/cloudflare.js'
+import { authFetch, cloudflare } from '../lib/cloudflare.js'
 import { normalizeScheduleWeekdays } from '../../shared/schedule.js'
+import { canAccessTable } from '../../shared/role-permissions.js'
+import { groupFeeHistoryByGroup } from '../../shared/fees.js'
+import { t } from './i18n.js'
+
+export const MAX_HOMEWORK_FILE_BYTES = 100 * 1024 * 1024
+export const MAX_QUESTION_FILE_BYTES = 20 * 1024 * 1024
+export const MAX_PROOF_FILE_BYTES = 20 * 1024 * 1024
 
 function assertConfigured() {
-  if (!cloudflare) throw new Error('Cloudflare API sozlanmagan.')
+  if (!cloudflare) throw new Error(t('Cloudflare API sozlanmagan.'))
 }
 
 function unwrap(result) {
@@ -11,19 +18,20 @@ function unwrap(result) {
 }
 
 async function workerApi(path, options = {}) {
-  const { data: sessionData } = await cloudflare.auth.getSession()
-  const token = sessionData.session?.access_token
-  if (!token) throw new Error('Sessiya tugagan. Telegram ilovasini qayta oching.')
-  const response = await fetch(path, {
+  const response = await authFetch(path, {
     ...options,
     headers: {
-      Authorization: `Bearer ${token}`,
       ...(options.body instanceof FormData ? {} : { 'Content-Type': 'application/json' }),
       ...options.headers,
     },
   })
-  const result = await response.json()
-  if (!response.ok) throw new Error(result.error || 'So‘rovni bajarib bo‘lmadi.')
+  let result = {}
+  try { result = await response.json() } catch { /* bo‘sh javob */ }
+  if (!response.ok) {
+    throw new Error(result.error || (response.status === 401
+      ? t('Sessiya tugagan. Telegram ilovasini qayta oching.')
+      : t('So‘rovni bajarib bo‘lmadi.')))
+  }
   return result.data
 }
 
@@ -31,7 +39,7 @@ export async function fetchProfile(userId) {
   assertConfigured()
   const { data, error } = await cloudflare.auth.getUser()
   if (error) throw error
-  if (!data.user || data.user.id !== userId) throw new Error('Foydalanuvchi profili topilmadi.')
+  if (!data.user || data.user.id !== userId) throw new Error(t('Foydalanuvchi profili topilmadi.'))
   return { ...data.user, teacherId: data.user.teacher_id }
 }
 
@@ -69,22 +77,16 @@ export async function resendScheduleNotification(notificationId) {
 
 async function uploadFile(file, context) {
   if (!file) return null
-  if (file.size <= 0 || file.size > 100 * 1024 * 1024) {
-    throw new Error('Har bir fayl hajmi 100 MB dan oshmasligi kerak.')
+  if (file.size <= 0 || file.size > MAX_HOMEWORK_FILE_BYTES) {
+    throw new Error(t('Har bir fayl hajmi 100 MB dan oshmasligi kerak.'))
   }
-  const { data: sessionData } = await cloudflare.auth.getSession()
-  if (!sessionData.session?.access_token) throw new Error('Fayl yuklash uchun tizimga kiring.')
   const form = new FormData()
   form.append('file', file)
   form.append('homework_id', context.homeworkId || '')
   form.append('group_id', context.groupId || '')
-  const response = await fetch('/api/files', {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${sessionData.session.access_token}` },
-    body: form,
-  })
-  const result = await response.json()
-  if (!response.ok) throw new Error(result.error || `Cloudflare R2 yuklash xatosi (${response.status}).`)
+  const response = await authFetch('/api/files', { method: 'POST', body: form })
+  const result = await response.json().catch(() => ({}))
+  if (!response.ok) throw new Error(result.error || t('Cloudflare R2 yuklash xatosi ({status}).', { status: response.status }))
   return result.file_url
 }
 
@@ -96,10 +98,11 @@ export async function loadHomeworks(profile) {
     return (await loadStudentMiniAppOverview()).homeworks
   }
 
+  // Eng yangi muddatlar birinchi: eski vazifalar 100 talik ro‘yxatni to‘ldirib qo‘ymasin.
   let query = cloudflare.from('homework')
     .select('id, group_id, teacher_id, title, description, file_url, due_at, groups(name)')
-    .order('due_at', { ascending: true })
-    .limit(100)
+    .order('due_at', { ascending: false })
+    .limit(200)
   if (profile.role === 'teacher') query = query.eq('teacher_id', profile.teacher_id)
   homeworks = unwrap(await query)
   if (!homeworks.length) return []
@@ -132,11 +135,18 @@ export async function loadGroups(profile) {
   const rows = unwrap(await cloudflare.from('groups')
     .select(columns)
     .order('name')
-    .limit(500))
+    .all())
   const scheduleState = await workerApi('/api/schedule/state')
   const stateByGroup = new Map((scheduleState.groups || []).map((state) => [state.group_id, state]))
+  // Narx tarixi: o‘tgan oy qarzlari o‘sha oydagi narxda hisoblanadi. Jadval yo‘q bo‘lsa — joriy narx.
+  let feeHistoryByGroup = new Map()
+  if (canAccessTable(profile?.role, 'group_fee_history')) {
+    const history = await cloudflare.from('group_fee_history').select('group_id, monthly_fee, valid_from').order('group_id').all()
+    if (!history.error) feeHistoryByGroup = groupFeeHistoryByGroup(history.data || [])
+  }
   return rows.map((group) => ({
     ...group,
+    feeHistory: feeHistoryByGroup.get(group.id) || [],
     schedule: normalizeScheduleWeekdays(Array.isArray(group.schedule) ? group.schedule : JSON.parse(group.schedule || '[]')),
     scheduleVersions: stateByGroup.get(group.id)?.versions || [],
     scheduleOverrides: stateByGroup.get(group.id)?.overrides || [],
@@ -145,7 +155,7 @@ export async function loadGroups(profile) {
 
 export async function createHomework(profile, input) {
   assertConfigured()
-  if (!profile.teacher_id) throw new Error('O‘qituvchi profili guruhga bog‘lanmagan.')
+  if (!profile.teacher_id) throw new Error(t('O‘qituvchi profili guruhga bog‘lanmagan.'))
   let fileUrl = null
   if (input.file) fileUrl = await uploadFile(input.file, { groupId: input.groupId })
   const deadline = input.deadline
@@ -167,12 +177,14 @@ export async function createHomework(profile, input) {
 
 export async function submitHomework(profile, homework, input) {
   assertConfigured()
-  if (!profile.student_id) throw new Error('O‘quvchi profili bazaga bog‘lanmagan.')
+  if (!profile.student_id) throw new Error(t('O‘quvchi profili bazaga bog‘lanmagan.'))
   const submission = await workerApi('/api/homework/draft', {
     method: 'POST',
     body: JSON.stringify({ homework_id: homework.id, text: input.text.trim() }),
   })
   const files = input.files || (input.file ? [input.file] : [])
+  const oversized = files.find((file) => file.size <= 0 || file.size > MAX_HOMEWORK_FILE_BYTES)
+  if (oversized) throw new Error(t('“{name}” fayli bo‘sh yoki 100 MB dan katta.', { name: oversized.name }))
   for (const file of files) {
     const form = new FormData()
     form.append('submission_id', submission.id)
@@ -183,25 +195,22 @@ export async function submitHomework(profile, homework, input) {
 }
 
 export async function uploadHomeworkDraftProof(submissionId, blob, durationSeconds) {
+  if (!blob?.size) throw new Error(t('Ovozli xabar yozilmadi. Qayta urinib ko‘ring.'))
+  if (blob.size > MAX_PROOF_FILE_BYTES) throw new Error(t('Ovozli xabar 20 MB dan oshmasligi kerak. Qisqaroq yozing.'))
+  if (blob.type && !blob.type.startsWith('audio/')) throw new Error(t('Faqat ovozli yozuv qabul qilinadi.'))
+  const extension = /ogg/.test(blob.type) ? 'ogg' : /mp4|aac|m4a/.test(blob.type) ? 'm4a' : 'webm'
   const form = new FormData()
   form.append('submission_id', submissionId)
   form.append('duration_seconds', String(durationSeconds))
-  form.append('file', blob, 'miniapp-voice-proof.webm')
+  form.append('file', blob, `miniapp-voice-proof.${extension}`)
   return workerApi('/api/homework/draft/proof', { method: 'POST', body: form })
 }
 
 async function reviewRequest(path, options) {
-  const { data: sessionData } = await cloudflare.auth.getSession()
-  const token = sessionData.session?.access_token
-  if (!token) throw new Error('Davom etish uchun tizimga kiring.')
-  const response = await fetch(path, {
+  return workerApi(path, {
     method: options?.method || 'GET',
-    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
     body: options?.body ? JSON.stringify(options.body) : undefined,
   })
-  const result = await response.json()
-  if (!response.ok) throw new Error(result.error || 'So‘rovni bajarib bo‘lmadi.')
-  return result.data
 }
 
 export async function reviewSubmission(id, status, feedback) {
@@ -219,7 +228,7 @@ export async function reviewSubmission(id, status, feedback) {
 export async function fetchHomeworkBotLink(homeworkId) {
   const response = await fetch('/api/telegram/bot-info')
   const result = await response.json()
-  if (!response.ok) throw new Error(result.error || 'Telegram bot manzilini olib bo‘lmadi.')
+  if (!response.ok) throw new Error(result.error || t('Telegram bot manzilini olib bo‘lmadi.'))
   return `https://t.me/${result.bot_username}?start=hw_${encodeURIComponent(homeworkId)}`
 }
 
@@ -231,12 +240,12 @@ export async function declareHomeworkResult(submissionId, result, reason = '') {
 }
 
 export async function fetchHomeworkFileBlob(file) {
-  const { data: sessionData } = await cloudflare.auth.getSession()
-  const token = sessionData.session?.access_token
-  if (!token) throw new Error('Sessiya tugagan. Telegram ilovasini qayta oching.')
-  const response = await fetch(file.download_url, { headers: { Authorization: `Bearer ${token}` } })
-  if (!response.ok) throw new Error('Faylni yuklab bo‘lmadi.')
-  const type = file.kind === 'voice' ? 'audio/ogg' : file.kind === 'video_note' ? 'video/mp4' : 'application/octet-stream'
+  const response = await authFetch(file.download_url)
+  if (!response.ok) throw new Error(t('Faylni yuklab bo‘lmadi.'))
+  // Yozilgan formatni saqlaymiz: Mini App ovozi webm/mp4, bot ovozi ogg bo‘ladi.
+  const fallback = file.kind === 'voice' ? 'audio/ogg' : file.kind === 'video_note' ? 'video/mp4' : 'application/octet-stream'
+  const stored = String(file.mime_type || '')
+  const type = stored && stored !== 'application/octet-stream' ? stored : fallback
   return URL.createObjectURL(new Blob([await response.blob()], { type }))
 }
 
@@ -248,6 +257,9 @@ export async function listQuestionTickets(status = '', search = '') {
 }
 
 export async function createQuestionTicket(text, groupId, file) {
+  if (file && (file.size <= 0 || file.size > MAX_QUESTION_FILE_BYTES)) {
+    throw new Error(t('Savolga biriktiriladigan fayl 20 MB dan oshmasligi kerak.'))
+  }
   if (!file) return workerApi('/api/questions', {
     method: 'POST',
     body: JSON.stringify({ text, ...(groupId ? { group_id: groupId } : {}) }),
@@ -280,18 +292,35 @@ export async function loadStudents(profile) {
   const columns = profile?.role === 'teacher'
     ? 'id, name, phone'
     : profile?.role === 'owner' || profile?.role === 'reception'
-      ? 'id, name, phone, parent_phone, monthly_fee, login'
+      ? 'id, name, phone, parent_phone, monthly_fee, login, telegram_id'
       : 'id, name, phone, parent_phone, monthly_fee'
-  const students = unwrap(await cloudflare.from('students').select(columns).order('name').limit(500))
-  if (profile?.role === 'teacher' || !students.length) return students
-  const profiles = unwrap(await cloudflare.from('profiles')
-    .select('id, student_id, telegram_id')
-    .in('student_id', students.map((student) => student.id)))
+  const students = unwrap(await cloudflare.from('students').select(columns).order('name').all())
+  if (!students.length) return students
+  // A’zolik: guruh kartalaridagi o‘quvchi soni, davomat ro‘yxati va oylik to‘lov hisobi uchun kerak.
+  const memberships = unwrap(await cloudflare.from('group_students').select('group_id, student_id').order('group_id').all())
+  const groupIdsByStudent = new Map()
+  for (const row of memberships) {
+    const list = groupIdsByStudent.get(row.student_id) || []
+    list.push(row.group_id)
+    groupIdsByStudent.set(row.student_id, list)
+  }
+  const withGroups = students.map((item) => ({ ...item, group_ids: groupIdsByStudent.get(item.id) || [] }))
+  if (profile?.role === 'teacher') return withGroups
+  // Qabulxonada `profiles` jadvaliga ruxsat yo‘q — so‘rasa butun yuklash 403 bilan to‘xtardi.
+  // Telegram holati: Mini App profili yoki bot orqali kod bilan ulanish (`telegram_links`).
+  const studentIds = students.map((student) => student.id)
+  const profiles = canAccessTable(profile?.role, 'profiles')
+    ? unwrap(await cloudflare.from('profiles').select('id, student_id, telegram_id').in('student_id', studentIds).all())
+    : []
+  const links = canAccessTable(profile?.role, 'telegram_links')
+    ? unwrap(await cloudflare.from('telegram_links').select('chat_id, student_id').order('student_id').all())
+    : []
   const byStudent = new Map(profiles.map((item) => [item.student_id, item]))
-  return students.map((item) => ({
+  const linkByStudent = new Map(links.map((item) => [item.student_id, item.chat_id]))
+  return withGroups.map((item) => ({
     ...item,
     profile_id: byStudent.get(item.id)?.id || null,
-    telegram_id: byStudent.get(item.id)?.telegram_id || null,
+    telegram_id: byStudent.get(item.id)?.telegram_id || item.telegram_id || linkByStudent.get(item.id) || null,
   }))
 }
 

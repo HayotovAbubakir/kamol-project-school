@@ -63,6 +63,86 @@ function emitAuth(event, session) {
   for (const listener of memoryListeners) listener(event, session)
 }
 
+let refreshInFlight = null
+
+/**
+ * Refresh token bir martalik. Bir vaqtda kelgan bir nechta 401 bitta yangilashni
+ * kutadi — aks holda ikkinchi so‘rov ishlatilgan token bilan foydalanuvchini chiqarib yuboradi.
+ */
+async function refreshSession(staleSession) {
+  const current = readSession()
+  if (current?.access_token && staleSession?.access_token && current.access_token !== staleSession.access_token) {
+    return current
+  }
+  if (!current?.refresh_token) return null
+  if (!refreshInFlight) {
+    refreshInFlight = (async () => {
+      try {
+        const response = await fetch('/api/auth/refresh', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ refresh_token: current.refresh_token }),
+        })
+        const result = await response.json().catch(() => ({}))
+        if (response.ok && result.session) {
+          writeSession(result.session)
+          emitAuth('TOKEN_REFRESHED', result.session)
+          return result.session
+        }
+        if (response.status === 401 || response.status === 400) {
+          writeSession(null)
+          emitAuth('SIGNED_OUT', null)
+        }
+        return null
+      } catch {
+        return null
+      } finally {
+        setTimeout(() => { refreshInFlight = null }, 0)
+      }
+    })()
+  }
+  return refreshInFlight
+}
+
+/** Avtorizatsiyali fetch: token qo‘shadi, 401 bo‘lsa sessiyani bir marta yangilab qayta urinadi. */
+export async function authFetch(path, init = {}) {
+  const send = (token) => fetch(path, {
+    ...init,
+    headers: { ...(init.headers || {}), Authorization: `Bearer ${token}` },
+  })
+  const session = readSession()
+  if (!session?.access_token) throw new Error('Sessiya tugagan. Qayta kiring.')
+  let response
+  try {
+    response = await send(session.access_token)
+  } catch {
+    throw new Error('Server bilan bog‘lanib bo‘lmadi. Internetni tekshiring.')
+  }
+  if (response.status === 401) {
+    const refreshed = await refreshSession(session)
+    if (refreshed?.access_token) response = await send(refreshed.access_token)
+  }
+  return response
+}
+
+/** authFetch + JSON javob; xato bo‘lsa serverning o‘zbekcha xabari bilan Error tashlaydi. */
+export async function authJson(path, { method = 'GET', body, fallbackError = 'So‘rovni bajarib bo‘lmadi.' } = {}) {
+  const isForm = typeof FormData !== 'undefined' && body instanceof FormData
+  const response = await authFetch(path, {
+    method,
+    headers: body === undefined || isForm ? {} : { 'Content-Type': 'application/json' },
+    body: body === undefined ? undefined : isForm ? body : JSON.stringify(body),
+  })
+  let result = {}
+  try { result = await response.json() } catch { /* bo‘sh javob */ }
+  if (!response.ok) {
+    const error = new Error(result.error || (response.status === 401 ? 'Sessiya tugagan. Qayta kiring.' : fallbackError))
+    error.status = response.status
+    throw error
+  }
+  return result
+}
+
 async function request(path, options = {}, canRefresh = true) {
   const { method = 'POST', body, token, headers = {} } = options
   let response
@@ -85,26 +165,17 @@ async function request(path, options = {}, canRefresh = true) {
   } catch {
     throw new Error(`Cloudflare API noto‘g‘ri javob berdi (${response.status}).`)
   }
-  const session = readSession()
   if (
     response.status === 401
     && canRefresh
     && token
-    && token === session?.access_token
-    && Boolean(session?.refresh_token)
     && path !== '/api/auth/login'
     && path !== '/api/auth/refresh'
   ) {
-    const refreshed = await request('/api/auth/refresh', {
-      body: { refresh_token: session.refresh_token },
-    }, false)
-    if (refreshed.response.ok && refreshed.result.session) {
-      writeSession(refreshed.result.session)
-      emitAuth('TOKEN_REFRESHED', refreshed.result.session)
-      return request(path, { ...options, token: refreshed.result.session.access_token }, false)
+    const refreshed = await refreshSession({ access_token: token })
+    if (refreshed?.access_token) {
+      return request(path, { ...options, token: refreshed.access_token }, false)
     }
-    writeSession(null)
-    emitAuth('SIGNED_OUT', null)
   }
   return { response, result }
 }
@@ -165,6 +236,21 @@ class Query {
   limit(count) {
     this.body.limit = count
     return this
+  }
+
+  /** Worker sahifalab qaytaradi (max 500); barcha qatorlarni ketma-ket yig‘adi. */
+  async all(pageSize = 500) {
+    const rows = []
+    for (let offset = 0; offset < 1_000_000; offset += pageSize) {
+      this.body.limit = pageSize
+      this.body.offset = offset
+      const { data, error } = await this.execute()
+      if (error) return { data: null, error }
+      const page = Array.isArray(data) ? data : []
+      rows.push(...page)
+      if (page.length < pageSize) break
+    }
+    return { data: rows, error: null }
   }
 
   single() {
@@ -279,7 +365,10 @@ class CloudflareClient {
           writeSession(null)
           return { data: { session: null }, error: null }
         }
-        const next = { ...session, user: result.user }
+        // `request()` may have rotated the tokens on 401; keep the newest session.
+        const latest = readSession()
+        if (!latest?.access_token) return { data: { session: null }, error: null }
+        const next = { ...latest, user: result.user }
         writeSession(next)
         return { data: { session: next }, error: null }
       } catch (error) {

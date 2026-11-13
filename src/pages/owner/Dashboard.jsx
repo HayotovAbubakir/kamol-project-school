@@ -20,6 +20,7 @@ import {
 } from '../../lib/analytics'
 import { getFinanceSummary } from '../../lib/store'
 import { currentMonthYear, formatMoney } from '../../lib/utils'
+import { translate as tr } from '../../i18n/runtime'
 
 export default function OwnerDashboard() {
   const { data } = useData()
@@ -68,7 +69,7 @@ export default function OwnerDashboard() {
           value={absentCount}
           tone="warning"
           icon={UserX}
-          onClick={() => navigate(isReception ? `${base}/attendance` : `${base}/attendance/absent-today`)}
+          onClick={() => navigate(`${base}/attendance/absent-today`)}
         />
         {!isReception && (
           <>
@@ -118,9 +119,9 @@ export default function OwnerDashboard() {
                   <span className="home-lesson-time">{formatLessonTime(lesson)}</span>
                   <span className="home-lesson-group">
                     {lesson.group}
-                    {lesson.status === 'changed' && <span className="schedule-change-badge">O‘zgartirilgan</span>}
-                    {lesson.status === 'cancelled' && <span className="schedule-cancel-badge">Bekor qilingan</span>}
-                    {lesson.status === 'rescheduled' && <span className="schedule-change-badge">Ko‘chirilgan · {lesson.newDate}</span>}
+                    {lesson.status === 'changed' && <span className="schedule-change-badge">{tr('O‘zgartirilgan')}</span>}
+                    {lesson.status === 'cancelled' && <span className="schedule-cancel-badge">{tr('Bekor qilingan')}</span>}
+                    {lesson.status === 'rescheduled' && <span className="schedule-change-badge">{tr('Ko‘chirilgan ·')} {lesson.newDate}</span>}
                   </span>
                   <span className="home-lesson-teacher">{lesson.teacher}</span>
                 </div>

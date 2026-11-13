@@ -14,7 +14,8 @@ import {
   updateStudent,
   updateTeacher,
 } from '../api.js'
-import { cloudflare, isBackendConfigured } from '../cloudflare.js'
+import { authJson, cloudflare, isBackendConfigured } from '../cloudflare.js'
+import { canAccessTable } from '../../../shared/role-permissions.js'
 import {
   createHomework,
   fetchProfile,
@@ -27,19 +28,7 @@ import {
 } from '../../miniapp/api.js'
 
 async function workerRequest(path, { method = 'POST', body } = {}) {
-  const { data } = await cloudflare.auth.getSession()
-  const token = data.session?.access_token
-  if (!token) throw new Error('Sessiya tugagan. Ilovani Telegram ichidan qayta oching.')
-  const response = await fetch(path, {
-    method,
-    headers: {
-      Authorization: `Bearer ${token}`,
-      ...(body === undefined ? {} : { 'Content-Type': 'application/json' }),
-    },
-    body: body === undefined ? undefined : JSON.stringify(body),
-  })
-  const result = await response.json()
-  if (!response.ok) throw new Error(result.error || 'So‘rovni bajarib bo‘lmadi.')
+  const result = await authJson(path, { method, body })
   return result.data ?? result
 }
 
@@ -73,7 +62,10 @@ export const students = {
   create: addStudent,
   update: updateStudent,
   remove: deleteStudent,
-  revealPassword: (id) => workerFunction(`students/${encodeURIComponent(id)}/password/reveal`, {}),
+  async revealPassword(id) {
+    const result = await workerFunction(`students/${encodeURIComponent(id)}/password/reveal`, {})
+    return typeof result === 'string' ? result : result?.password || ''
+  },
   changePassword: (id, password, username) => workerFunction(`students/${encodeURIComponent(id)}/password`, { password, username }),
   unlinkTelegram: (id) => workerFunction(`students/${encodeURIComponent(id)}/telegram/unlink`, {}),
 }
@@ -86,14 +78,19 @@ export const staff = {
   update: (id, updates) => workerFunction(`staff/${encodeURIComponent(id)}`, updates),
 }
 export const teachers = {
-  async list() {
-    const { data, error } = await cloudflare.from('teachers').select('id, name, phone, monthly_salary, created_at').order('name')
+  async list(role = 'owner') {
+    const { data, error } = await cloudflare.from('teachers').select('id, name, phone, monthly_salary, created_at').order('name').all()
     if (error) throw error
     const rows = data || []
     if (!rows.length) return []
-    const profiles = await cloudflare.from('profiles').select('id, teacher_id, telegram_id').in('teacher_id', rows.map((row) => row.id))
-    if (profiles.error) throw profiles.error
-    const byTeacher = new Map((profiles.data || []).map((profile) => [profile.teacher_id, profile]))
+    // Qabulxona `profiles` jadvalini o‘qiy olmaydi; Telegram ulash ham faqat egasiga ochiq.
+    let profileRows = []
+    if (canAccessTable(role, 'profiles')) {
+      const profiles = await cloudflare.from('profiles').select('id, teacher_id, telegram_id').in('teacher_id', rows.map((row) => row.id))
+      if (profiles.error) throw profiles.error
+      profileRows = profiles.data || []
+    }
+    const byTeacher = new Map(profileRows.map((profile) => [profile.teacher_id, profile]))
     return rows.map((row) => ({
       ...row,
       monthlySalary: Number(row.monthly_salary) || 0,
@@ -108,22 +105,42 @@ export const teachers = {
 export const payments = {
   async list(profile) {
     let query = cloudflare.from('payments')
-      .select('id, student_id, student_name, amount, month, year, paid_at')
+      .select('id, student_id, student_name, amount, month, year, paid_at, method, voided_at')
       .order('paid_at', { ascending: false })
+    if (profile.role === 'student') query = query.eq('student_id', profile.student_id)
+    // Qarzdorlar hisobi joriy oyning barcha to‘lovlarini talab qiladi — 100 talik limit uni buzardi.
+    const { data, error } = await query.all()
+    if (error) throw error
+    return data || []
+  },
+  create: addPayment,
+  correct: (id, { amount, month, year, method, reason }) => workerRequest('/api/payments/correct', {
+    body: {
+      id,
+      ...(amount !== undefined ? { amount: Number(amount) } : {}),
+      ...(month !== undefined ? { month: Number(month) } : {}),
+      ...(year !== undefined ? { year: Number(year) } : {}),
+      ...(method ? { method } : {}),
+      ...(reason ? { reason } : {}),
+    },
+  }),
+  void: (id, reason) => workerRequest('/api/payments/void', { body: { id, reason } }),
+}
+export const attendance = {
+  async list(profile) {
+    let query = cloudflare.from('attendance')
+      .select('id, student_id, group_id, date, status, note, source, checked_in_at, late_minutes, groups(name)')
+      .order('date', { ascending: false })
     if (profile.role === 'student') query = query.eq('student_id', profile.student_id)
     const { data, error } = await query.limit(100)
     if (error) throw error
     return data || []
   },
-  create: addPayment,
-}
-export const attendance = {
-  async list(profile) {
-    let query = cloudflare.from('attendance')
-      .select('id, student_id, group_id, date, status, note, groups(name)')
-      .order('date', { ascending: false })
-    if (profile.role === 'student') query = query.eq('student_id', profile.student_id)
-    const { data, error } = await query.limit(100)
+  async forDate(date) {
+    const { data, error } = await cloudflare.from('attendance')
+      .select('id, student_id, group_id, date, status, note, source, checked_in_at, late_minutes')
+      .eq('date', date)
+      .all()
     if (error) throw error
     return data || []
   },
@@ -134,7 +151,7 @@ export const expenses = {
     const { data, error } = await cloudflare.from('expenses')
       .select('id, title, amount, category, date')
       .order('date', { ascending: false })
-      .limit(100)
+      .limit(200)
     if (error) throw error
     return data || []
   },
@@ -153,34 +170,20 @@ export const salaryPayments = {
   create: addSalaryPayment,
 }
 export const finance = {
-  async summary(from, to) {
-    const { data } = await cloudflare.auth.getSession()
-    const token = data.session?.access_token
-    if (!token) throw new Error('Sessiya tugagan. Ilovani Telegram ichidan qayta oching.')
+  summary(from, to) {
     const params = new URLSearchParams({ from, to })
-    const response = await fetch(`/api/finance/summary?${params}`, {
-      headers: { Authorization: `******` },
-    })
-    const result = await response.json()
-    if (!response.ok) throw new Error(result.error || 'Moliyaviy hisobotni yuklab bo‘lmadi.')
-    return result
+    return authJson(`/api/finance/summary?${params}`, { fallbackError: 'Moliyaviy hisobotni yuklab bo‘lmadi.' })
   },
 }
 export const reports = { monthlyHomework: loadMonthlyReport }
 export const groupManagement = { create: addGroup, update: updateGroup, remove: deleteGroup }
 
 export const telegram = {
-  async createInvite(target) {
-    const { data } = await cloudflare.auth.getSession()
-    const token = data.session?.access_token
-    if (!token) throw new Error('Sessiya tugagan. Ilovani Telegram ichidan qayta oching.')
-    const response = await fetch('/api/telegram/invites', {
+  createInvite(target) {
+    return authJson('/api/telegram/invites', {
       method: 'POST',
-      headers: { Authorization: `******`, 'Content-Type': 'application/json' },
-      body: JSON.stringify(typeof target === 'string' ? { profileId: target } : target),
+      body: typeof target === 'string' ? { profileId: target } : target,
+      fallbackError: 'Telegram ulash havolasini yaratib bo‘lmadi.',
     })
-    const result = await response.json()
-    if (!response.ok) throw new Error(result.error || 'Telegram ulash havolasini yaratib bo‘lmadi.')
-    return result
   },
 }

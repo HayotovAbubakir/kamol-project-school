@@ -7,6 +7,7 @@ import { getTodayDayValue } from '../../lib/analytics'
 import { slotTeacherId, teacherSlotsInGroup } from '../../lib/store'
 import { getGroupLessonSlotsOnDate } from '../../lib/analytics'
 import ScheduleChangeDialog from '../ScheduleChangeDialog'
+import { translate as tr } from '../../i18n/runtime'
 
 function formatTodaySlots(group, t, teacherId) {
   const day = getTodayDayValue()
@@ -111,7 +112,7 @@ export function TeacherGroupsPanel({
               group,
               slotId: String(teacherSlotsInGroup(group, teacherId)[0]?.slotId || ''),
             })}>
-            O‘zgartirish
+            {tr('O‘zgartirish')}
           </button>
         </article>
       ))}

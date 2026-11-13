@@ -5,6 +5,7 @@ import MoneyInput from '../../components/MoneyInput'
 import { PageEnter } from '../../components/motion/PageMotion'
 import {
   Avatar,
+  EmptyState,
   MasterDetail,
   MasterListItem,
   PageHeader,
@@ -111,7 +112,9 @@ export default function OwnerDebtors() {
             <div className="master-list-head">
               <span className="chart-card-meta">{period}</span>
             </div>
-            {unpaidList.length === 0 ? null : unpaidList.map((item) => (
+            {unpaidList.length === 0 ? (
+              <EmptyState title={t('owner.debtors.empty')} />
+            ) : unpaidList.map((item) => (
               <MasterListItem
                 key={item.id}
                 active={selectedId === item.id}
@@ -126,7 +129,7 @@ export default function OwnerDebtors() {
         )}
         detail={
           !selected ? (
-            <div className="master-detail-empty">{t('owner.paid.select')}</div>
+            <div className="master-detail-empty">{unpaidList.length ? t('owner.paid.select') : t('owner.debtors.empty')}</div>
           ) : (
             <>
               <div className="master-detail-head">

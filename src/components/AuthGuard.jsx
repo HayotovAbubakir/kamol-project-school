@@ -10,6 +10,8 @@ import { useLocation } from 'react-router-dom'
 function routePermission(pathname) {
   const section = pathname.split('/').filter(Boolean)
   if (!section.length) return 'owner'
+  // Shaxsiy ko‘rinish sozlamalari (fon) har bir rolning o‘z bosh sahifasi ruxsati bilan ochiladi.
+  if (section[1] === 'settings' && ['fon', 'appearance'].includes(section[2])) return section[0]
   if (section[0] === 'owner') return 'owner'
   if (section[0] === 'reception') {
     if (section.includes('finance')) return 'finance'

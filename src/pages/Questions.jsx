@@ -5,6 +5,7 @@ import { PageHeader, StatusBadge } from '../components/ui'
 import Select from '../components/Select'
 import { useAuth } from '../context/AuthContext'
 import { cloudflare } from '../lib/cloudflare'
+import { translate as tr } from '../i18n/runtime'
 
 async function questionRequest(path, token, options = {}) {
   const response = await fetch(path, {
@@ -40,7 +41,7 @@ export default function Questions() {
     try {
       const { data } = await cloudflare.auth.getSession()
       const token = data.session?.access_token
-      if (!token) throw new Error('Sessiya tugagan. Qayta kiring.')
+      if (!token) throw new Error(tr('Sessiya tugagan. Qayta kiring.'))
       const params = new URLSearchParams()
       if (status) params.set('status', status)
       if (search.trim()) params.set('search', search.trim())
@@ -70,7 +71,7 @@ export default function Questions() {
         body: JSON.stringify({ text }),
       })
       setReply((current) => ({ ...current, [ticket.id]: '' }))
-      setNotice('Javob Telegram orqali o‘quvchiga yuborildi.')
+      setNotice(tr('Javob Telegram orqali o‘quvchiga yuborildi.'))
       await load()
     } catch (sendError) {
       setError(sendError.message || 'Javob yuborilmadi.')
@@ -88,7 +89,7 @@ export default function Questions() {
         method: 'POST',
         body: JSON.stringify({}),
       })
-      setNotice('Savol yopildi.')
+      setNotice(tr('Savol yopildi.'))
       await load()
     } catch (closeError) {
       setError(closeError.message || 'Savolni yopib bo‘lmadi.')
@@ -102,7 +103,7 @@ export default function Questions() {
     try {
       const { data } = await cloudflare.auth.getSession()
       const response = await fetch(fileUrl, { headers: { Authorization: `Bearer ${data.session?.access_token || ''}` } })
-      if (!response.ok) throw new Error('Ilovani yuklab bo‘lmadi.')
+      if (!response.ok) throw new Error(tr('Ilovani yuklab bo‘lmadi.'))
       const objectUrl = URL.createObjectURL(await response.blob())
       const link = document.createElement('a')
       link.href = objectUrl
@@ -124,21 +125,21 @@ export default function Questions() {
 
   return (
     <PageEnter>
-      <PageHeader title="Savollar" subtitle="O‘quvchilar yuborgan savollar va yozishmalar" />
+      <PageHeader title={tr('Savollar')} subtitle={tr('O‘quvchilar yuborgan savollar va yozishmalar')} />
       {error && (
         <div className="alert alert-error flex flex-wrap items-center justify-between gap-3" role="alert">
           <span>{error}</span>
           <button type="button" className="btn btn-outline btn-sm" onClick={load} disabled={loading}>
-            {loading ? 'Yuklanmoqda…' : 'Qayta urinish'}
+            {loading ? tr('Yuklanmoqda…') : tr('Qayta urinish')}
           </button>
         </div>
       )}
       {notice && <div className="alert alert-success" role="status" aria-live="polite">{notice}</div>}
       <div className="card question-toolbar mb-4">
         <label className="field question-toolbar-field">
-          <span>Holati</span>
+          <span>{tr('Holati')}</span>
           <Select
-            aria-label="Holati"
+            aria-label={tr('Holati')}
             value={status}
             onChange={(event) => setStatus(event.target.value)}
             options={[
@@ -150,7 +151,7 @@ export default function Questions() {
           />
         </label>
         <label className="field question-toolbar-search">
-          <span>Qidirish</span>
+          <span>{tr('Qidirish')}</span>
           <input
             className="input"
             type="search"
@@ -158,25 +159,25 @@ export default function Questions() {
             autoComplete="off"
             value={search}
             onChange={(event) => setSearch(event.target.value)}
-            placeholder="O‘quvchi yoki xabar matni…"
+            placeholder={tr('O‘quvchi yoki xabar matni…')}
           />
         </label>
         <div className="question-toolbar-side">
           <span className="question-unread-chip">O‘qilmagan: <strong>{unreadTotal}</strong></span>
           {(status || search) ? (
-            <button type="button" className="btn btn-outline btn-sm" onClick={() => { setStatus(''); setSearch('') }}>Tozalash</button>
+            <button type="button" className="btn btn-outline btn-sm" onClick={() => { setStatus(''); setSearch('') }}>{tr('Tozalash')}</button>
           ) : null}
         </div>
       </div>
-      {loading ? <div className="grid gap-3" aria-busy="true" aria-label="Savollar yuklanmoqda">
+      {loading ? <div className="grid gap-3" aria-busy="true" aria-label={tr('Savollar yuklanmoqda')}>
         {[0, 1, 2].map((row) => <div key={row} className="card skeleton-row" />)}
       </div>
         : !tickets.length ? <div className="card empty-state">
           <Inbox size={30} aria-hidden="true" />
-          <strong>{hasFilters ? 'Bu filtrga mos savol topilmadi' : 'Hozircha savollar yo‘q'}</strong>
-          <span>{hasFilters ? 'Boshqa so‘z bilan qidiring yoki filtrlarni tozalang.' : 'O‘quvchilar yuborgan savollar shu yerda ko‘rinadi.'}</span>
+          <strong>{hasFilters ? tr('Bu filtrga mos savol topilmadi') : tr('Hozircha savollar yo‘q')}</strong>
+          <span>{hasFilters ? tr('Boshqa so‘z bilan qidiring yoki filtrlarni tozalang.') : tr('O‘quvchilar yuborgan savollar shu yerda ko‘rinadi.')}</span>
           {hasFilters ? (
-            <button type="button" className="btn btn-outline btn-sm" onClick={() => { setStatus(''); setSearch('') }}>Filtrlarni tozalash</button>
+            <button type="button" className="btn btn-outline btn-sm" onClick={() => { setStatus(''); setSearch('') }}>{tr('Filtrlarni tozalash')}</button>
           ) : null}
         </div>
           : <div className="grid gap-3">
@@ -190,7 +191,7 @@ export default function Questions() {
                   <span className="flex items-center gap-2">
                     {Number(ticket.unread_count) > 0 && <StatusBadge tone="warning">{ticket.unread_count} yangi</StatusBadge>}
                     <StatusBadge tone={ticket.status === 'open' ? 'warning' : ticket.status === 'answered' ? 'success' : 'default'}>
-                      {ticket.status === 'open' ? 'Ochiq' : ticket.status === 'answered' ? 'Javob berilgan' : 'Yopilgan'}
+                      {ticket.status === 'open' ? tr('Ochiq') : ticket.status === 'answered' ? tr('Javob berilgan') : tr('Yopilgan')}
                     </StatusBadge>
                   </span>
                 </button>
@@ -198,18 +199,18 @@ export default function Questions() {
                   <div className="mt-4 grid gap-3 border-t border-[var(--border)] pt-3">
                     {ticket.messages?.map((message) => (
                       <article key={message.id} className="rounded-xl bg-[var(--surface-muted)] p-3">
-                        <p className="text-xs text-muted">{message.actor_role === 'student' ? 'O‘quvchi' : message.actor_role === 'teacher' ? 'O‘qituvchi' : 'Qabulxona'} · {formatDate(message.created_at)}</p>
+                        <p className="text-xs text-muted">{message.actor_role === 'student' ? tr('O‘quvchi') : message.actor_role === 'teacher' ? tr('O‘qituvchi') : tr('Qabulxona')} · {formatDate(message.created_at)}</p>
                         {message.body && <p className="mt-1 whitespace-pre-wrap break-words text-sm">{message.body}</p>}
-                        {message.file_url && <a className="btn btn-outline btn-sm mt-2" href={message.file_url} onClick={(event) => downloadAttachment(event, message.file_url)}>Ilovani yuklab olish</a>}
+                        {message.file_url && <a className="btn btn-outline btn-sm mt-2" href={message.file_url} onClick={(event) => downloadAttachment(event, message.file_url)}>{tr('Ilovani yuklab olish')}</a>}
                       </article>
                     ))}
                     {ticket.status !== 'closed' && (
                       <div className="grid gap-2">
-                        <label className="field"><span>Javob</span><textarea className="input" rows="3" maxLength="10000" value={reply[ticket.id] || ''} onChange={(event) => setReply((current) => ({ ...current, [ticket.id]: event.target.value }))} /></label>
+                        <label className="field"><span>{tr('Javob')}</span><textarea className="input" rows="3" maxLength="10000" value={reply[ticket.id] || ''} onChange={(event) => setReply((current) => ({ ...current, [ticket.id]: event.target.value }))} /></label>
                         <div className="flex flex-wrap gap-2">
-                          <button type="button" className="btn btn-primary" disabled={busy || !String(reply[ticket.id] || '').trim()} onClick={() => sendReply(ticket)}>Javobni yuborish</button>
+                          <button type="button" className="btn btn-primary" disabled={busy || !String(reply[ticket.id] || '').trim()} onClick={() => sendReply(ticket)}>{tr('Javobni yuborish')}</button>
                           {user?.role === 'owner' || user?.role === 'reception'
-                            ? <button type="button" className="btn btn-outline" disabled={busy} onClick={() => closeTicket(ticket)}>Yopish</button>
+                            ? <button type="button" className="btn btn-outline" disabled={busy} onClick={() => closeTicket(ticket)}>{tr('Yopish')}</button>
                             : null}
                         </div>
                       </div>

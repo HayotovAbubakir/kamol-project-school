@@ -3,6 +3,13 @@ import { Miniflare } from 'miniflare'
 import worker, { buildHomeworkNotificationText, canAccessTable, expireHomeworkDrafts } from '../worker/index.js'
 import { calculateFinanceSummary, validateGroupSchedule } from '../worker/domain.js'
 import { hashInviteCode } from '../worker/telegram-auth.js'
+import {
+  extractHikvisionEvents,
+  faceAttendanceNotice,
+  faceAttendanceStatus,
+  finalizeFaceAbsences,
+  parseDeviceTime,
+} from '../worker/face-id.js'
 import { isValidLogin, loginBaseFromName } from '../shared/account-credentials.js'
 import { findDateScheduleConflict, getEffectiveLesson } from '../shared/schedule.js'
 import {
@@ -89,7 +96,13 @@ beforeAll(async () => {
     'CREATE TABLE refresh_tokens (token_hash TEXT PRIMARY KEY, account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE, expires_at INTEGER NOT NULL, used_at INTEGER, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)',
     'CREATE TABLE students (id TEXT PRIMARY KEY, name TEXT NOT NULL, phone TEXT NOT NULL DEFAULT \'\', parent_phone TEXT NOT NULL DEFAULT \'\', monthly_fee REAL NOT NULL DEFAULT 0, joined_at TEXT NOT NULL DEFAULT (date(\'now\')), public_code TEXT UNIQUE, login TEXT UNIQUE COLLATE NOCASE, auth_user_id TEXT, telegram_id INTEGER, password_ciphertext TEXT, password_iv TEXT, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)',
     'CREATE TABLE teachers (id TEXT PRIMARY KEY, name TEXT NOT NULL, phone TEXT NOT NULL DEFAULT \'\', monthly_salary REAL NOT NULL DEFAULT 0, telegram_id INTEGER, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)',
-    "CREATE TABLE attendance (id TEXT PRIMARY KEY, student_id TEXT NOT NULL, group_id TEXT NOT NULL, date TEXT NOT NULL DEFAULT (date('now')), status TEXT NOT NULL, note TEXT NOT NULL DEFAULT '', marked_by TEXT, marked_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)",
+    "CREATE TABLE attendance (id TEXT PRIMARY KEY, student_id TEXT NOT NULL, group_id TEXT NOT NULL, date TEXT NOT NULL DEFAULT (date('now')), status TEXT NOT NULL, note TEXT NOT NULL DEFAULT '', marked_by TEXT, marked_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, source TEXT NOT NULL DEFAULT 'manual', checked_in_at TEXT, late_minutes INTEGER, UNIQUE (student_id, group_id, date))",
+    "CREATE TABLE student_faces (id TEXT PRIMARY KEY, student_id TEXT NOT NULL REFERENCES students(id) ON DELETE CASCADE, r2_key TEXT NOT NULL UNIQUE, angle TEXT NOT NULL CHECK (angle IN ('front', 'left', 'right')), size_bytes INTEGER NOT NULL DEFAULT 0, created_by TEXT, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, UNIQUE (student_id, angle))",
+    'CREATE TABLE face_people (student_id TEXT PRIMARY KEY REFERENCES students(id) ON DELETE CASCADE, employee_no INTEGER NOT NULL UNIQUE, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)',
+    "CREATE TABLE face_devices (id TEXT PRIMARY KEY, name TEXT NOT NULL, serial TEXT NOT NULL DEFAULT '', token_hash TEXT NOT NULL UNIQUE, is_active INTEGER NOT NULL DEFAULT 1, last_seen_at TEXT, last_event_at TEXT, created_by TEXT, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)",
+    "CREATE TABLE face_sync (student_id TEXT NOT NULL, device_id TEXT NOT NULL REFERENCES face_devices(id) ON DELETE CASCADE, employee_no INTEGER NOT NULL, person_name TEXT NOT NULL DEFAULT '', action TEXT NOT NULL DEFAULT 'upsert', status TEXT NOT NULL DEFAULT 'pending', version INTEGER NOT NULL DEFAULT 1, attempts INTEGER NOT NULL DEFAULT 0, last_error TEXT, synced_at TEXT, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY (student_id, device_id))",
+    "CREATE TABLE face_events (id TEXT PRIMARY KEY, device_id TEXT NOT NULL, dedupe_key TEXT NOT NULL UNIQUE, employee_no TEXT, student_id TEXT, event_time TEXT NOT NULL, major INTEGER, minor INTEGER, raw TEXT NOT NULL DEFAULT '{}', processed INTEGER NOT NULL DEFAULT 0, result TEXT, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)",
+    'CREATE TABLE face_lesson_closures (group_id TEXT NOT NULL, date TEXT NOT NULL, slot_id TEXT NOT NULL, absent_count INTEGER NOT NULL DEFAULT 0, closed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY (group_id, date, slot_id))',
     'CREATE TABLE telegram_links (chat_id INTEGER PRIMARY KEY, student_id TEXT NOT NULL REFERENCES students(id), linked_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)',
     'CREATE TABLE group_students (group_id TEXT NOT NULL, student_id TEXT NOT NULL, PRIMARY KEY (group_id, student_id))',
     "CREATE TABLE groups (id TEXT PRIMARY KEY, name TEXT NOT NULL, teacher_id TEXT, monthly_fee REAL NOT NULL DEFAULT 0, schedule TEXT NOT NULL DEFAULT '[]', created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)",
@@ -814,6 +827,20 @@ describe('D1 worker routes and authentication', () => {
     expect(download.headers.get('Content-Security-Policy')).toBe("default-src 'none'; sandbox")
     const unauthenticated = await request(filePath)
     expect(unauthenticated.status).toBe(401)
+
+    const expiredUrl = new URL(fileUrl)
+    expiredUrl.searchParams.set('exp', String(Date.now() - 1000))
+    await env.DB.prepare('UPDATE homework SET file_url = ? WHERE id = ?').bind(expiredUrl.toString(), 'file-homework').run()
+    const listed = await request('/api/db', {
+      method: 'POST',
+      token: ownerSession.access_token,
+      body: { table: 'homework', columns: 'id, file_url', filters: [{ column: 'id', op: 'eq', value: 'file-homework' }] },
+    })
+    const [row] = (await listed.json()).data
+    const refreshed = new URL(row.file_url)
+    expect(Number(refreshed.searchParams.get('exp'))).toBeGreaterThan(Date.now())
+    const refreshedDownload = await request(refreshed.pathname + refreshed.search, { token: ownerSession.access_token })
+    expect(refreshedDownload.status).toBe(200)
   })
 
   it('rejects website student credentials and student account creation', async () => {
@@ -1116,7 +1143,10 @@ describe('D1 worker routes and authentication', () => {
     const inbox = await request('/api/questions?status=open', { token: receptionToken })
     const inboxData = (await inbox.json()).data
     expect(inboxData[0].id).toBe(ticketId)
-    expect(inboxData[0].unread_count).toBe(0)
+    // Birinchi ochilishda yangi xabar soni ko‘rinadi, so‘ng xabarlar o‘qilgan deb belgilanadi.
+    expect(inboxData[0].unread_count).toBe(1)
+    const inboxAgain = (await (await request('/api/questions?status=open', { token: receptionToken })).json()).data
+    expect(inboxAgain[0].unread_count).toBe(0)
     const previousBotToken = env.TELEGRAM_BOT_TOKEN
     env.TELEGRAM_BOT_TOKEN = ''
     const reply = await request(`/api/questions/${ticketId}/reply`, {
@@ -1559,7 +1589,7 @@ describe('telegram webhook endpoint', () => {
       })
       expect(response.status).toBe(200)
       expect(calls.some((url) => url.startsWith('https://school.test/api/bot/'))).toBe(false)
-      expect(sent.some((text) => text.includes('Kamol School ota-ona boti'))).toBe(true)
+      expect(sent.some((text) => text.includes('Kamol School boti'))).toBe(true)
       expect(sent.some((text) => text.includes('So‘rovni bajarishda xatolik'))).toBe(false)
     } finally {
       vi.unstubAllGlobals()
@@ -1691,6 +1721,41 @@ describe('account credentials and explicit student access', () => {
     expect(listBody).not.toContain('student-pass-123')
   })
 
+  it('edits a student without changing the join date and deletes while keeping payment history', async () => {
+    const owner = await loginOwner()
+    const created = (await (await createStudent(owner.access_token, 'Tahrir Test')).json()).data
+    const before = await env.DB.prepare('SELECT joined_at FROM students WHERE id = ?').bind(created.id).first()
+
+    const edit = await request(`/api/students/${created.id}`, {
+      method: 'POST',
+      token: owner.access_token,
+      body: { action: 'update', name: 'Tahrir Yangilandi', phone: '+998901112233' },
+    })
+    expect(edit.status).toBe(200)
+    const after = await env.DB.prepare('SELECT name, phone, joined_at FROM students WHERE id = ?').bind(created.id).first()
+    expect(after).toMatchObject({ name: 'Tahrir Yangilandi', phone: '+998901112233', joined_at: before.joined_at })
+
+    await env.DB.prepare(`INSERT INTO payments (id, student_id, student_name, amount, month, year)
+      VALUES (?, ?, '', 300000, 1, 2026)`).bind(crypto.randomUUID(), created.id).run()
+    await env.DB.prepare('INSERT INTO telegram_links (chat_id, student_id) VALUES (?, ?)').bind(70001, created.id).run()
+
+    const removed = await request(`/api/students/${created.id}`, {
+      method: 'POST',
+      token: owner.access_token,
+      body: { action: 'delete' },
+    })
+    expect(removed.status).toBe(200)
+    expect(await env.DB.prepare('SELECT id FROM students WHERE id = ?').bind(created.id).first()).toBeNull()
+    expect(await env.DB.prepare('SELECT chat_id FROM telegram_links WHERE chat_id = 70001').first()).toBeNull()
+    const kept = await env.DB.prepare('SELECT student_name, amount FROM payments WHERE student_name = ?').bind('Tahrir Yangilandi').first()
+    expect(kept).toMatchObject({ amount: 300000 })
+    const relogin = await request('/api/auth/telegram/password', {
+      method: 'POST',
+      body: { initData: await telegramInitData(987654399), username: created.username, password: 'student-pass-123' },
+    })
+    expect(relogin.status).not.toBe(200)
+  })
+
   it('allows only owner and reception to reveal passwords and records reveal/change audit events', async () => {
     const owner = await loginOwner()
     const created = (await (await createStudent(owner.access_token, 'Maxfiy Parol')).json()).data
@@ -1806,5 +1871,189 @@ describe('account credentials and explicit student access', () => {
       body: { table: 'students', action: 'update', filters: [{ op: 'eq', column: 'id', value: student.id }], values: { name: 'Tampered' } },
     })
     expect(forbidden.status).toBe(403)
+  })
+})
+
+describe('Face ID attendance', () => {
+  const lessonDate = '2026-11-16'
+  const jpeg = () => new File([new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 1, 2, 3, 4, 0xff, 0xd9])], 'front.jpg', { type: 'image/jpeg' })
+
+  async function staffSession(owner, role, name, password) {
+    const created = (await (await request('/api/staff', {
+      method: 'POST',
+      token: owner.access_token,
+      body: { name, role, password },
+    })).json()).data
+    return (await (await request('/api/auth/login', {
+      method: 'POST',
+      body: { username: created.username, password },
+    })).json()).session
+  }
+
+  async function uploadFace(token, studentId, angle = 'front', file = jpeg()) {
+    const form = new FormData()
+    form.set('angle', angle)
+    form.set('file', file)
+    return request(`/api/students/${studentId}/faces`, { method: 'POST', token, body: form })
+  }
+
+  function acsEvent(employeeNo, time, extra = {}) {
+    return { AcsEvent: { InfoList: [{ major: 5, minor: 75, time, employeeNoString: String(employeeNo), ...extra }] } }
+  }
+
+  it('applies the present/late rule within the early window and builds short notices', () => {
+    const lesson = { startTime: '14:00', endTime: '15:30' }
+    expect(faceAttendanceStatus(13 * 60 - 1, lesson)).toBeNull()
+    expect(faceAttendanceStatus(13 * 60, lesson)).toEqual({ status: 'present', lateMinutes: 0 })
+    expect(faceAttendanceStatus(14 * 60, lesson)).toEqual({ status: 'present', lateMinutes: 0 })
+    expect(faceAttendanceStatus(14 * 60 + 12, lesson)).toEqual({ status: 'late', lateMinutes: 12 })
+    expect(faceAttendanceStatus(15 * 60 + 31, lesson)).toBeNull()
+    expect(parseDeviceTime('2026-11-16T14:12:00').toISOString()).toBe('2026-11-16T09:12:00.000Z')
+    expect(parseDeviceTime('2026-11-16T14:12:00+0500').toISOString()).toBe('2026-11-16T09:12:00.000Z')
+    const late = faceAttendanceNotice({ studentName: 'Ali', groupName: 'A1', status: 'late', lateMinutes: 12, date: lessonDate, checkedInAt: '2026-11-16T09:12:00.000Z' })
+    expect(late).toBe('Ali darsga 12 daqiqa kechikdi.\nGuruh: A1\nSana: 16.11.2026\nKelgan vaqti: 14:12')
+    expect(faceAttendanceNotice({ studentName: 'Ali', groupName: 'A1', status: 'absent', date: lessonDate })).toBe('Ali darsga kelmadi.\nGuruh: A1\nSana: 16.11.2026')
+    expect(faceAttendanceNotice({ status: 'present' })).toBeNull()
+    expect(extractHikvisionEvents({
+      dateTime: '2026-11-16T14:01:00+05:00',
+      eventType: 'AccessControllerEvent',
+      AccessControllerEvent: { majorEventType: 5, subEventType: 75, employeeNoString: '1001', serialNo: 7 },
+    })).toMatchObject([{ major: 5, minor: 75, employeeNo: '1001', time: '2026-11-16T14:01:00+05:00', serialNo: 7 }])
+  })
+
+  it('enrolls faces, syncs through the device token, ingests scans, dedupes, and marks absentees', async () => {
+    const owner = await loginOwner()
+    const groupId = crypto.randomUUID()
+    await env.DB.prepare('INSERT INTO groups (id, name, schedule) VALUES (?, ?, ?)')
+      .bind(groupId, 'Face A1', JSON.stringify([{ slotId: 'mon', day: 1, startTime: '14:00', endTime: '15:30' }])).run()
+    const students = []
+    for (const name of ['Face Present', 'Face Late', 'Face Absent']) {
+      const created = (await (await request('/api/students', {
+        method: 'POST',
+        token: owner.access_token,
+        body: { name, password: 'student-pass-123', auto_username: true, group_ids: [groupId], joined_at: '2026-01-01' },
+      })).json()).data
+      students.push(created)
+    }
+
+    expect((await request('/api/face/devices', { method: 'POST', body: { name: 'Kirish' } })).status).toBe(401)
+    const reception = await staffSession(owner, 'reception', 'Face Reception', 'reception-face-pass-123')
+    expect((await request('/api/face/devices', { method: 'POST', token: reception.access_token, body: { name: 'X' } })).status).toBe(403)
+    const teacher = await staffSession(owner, 'teacher', 'Face Teacher', 'teacher-face-pass-123')
+    expect((await uploadFace(teacher.access_token, students[0].id)).status).toBe(403)
+
+    const deviceResponse = await request('/api/face/devices', { method: 'POST', token: owner.access_token, body: { name: 'Kirish', serial: 'DS-K1T341' } })
+    expect(deviceResponse.status).toBe(201)
+    const device = (await deviceResponse.json()).data
+    expect(device.token).toMatch(/^kfd_/)
+    const stored = await env.DB.prepare('SELECT token_hash FROM face_devices WHERE id = ?').bind(device.id).first()
+    expect(stored.token_hash).not.toContain(device.token)
+
+    expect((await uploadFace(reception.access_token, students[0].id, 'up')).status).toBe(400)
+    expect((await uploadFace(reception.access_token, students[0].id, 'front', new File(['not a jpeg'], 'x.jpg', { type: 'image/jpeg' }))).status).toBe(415)
+    for (const student of students) expect((await uploadFace(reception.access_token, student.id)).status).toBe(201)
+    const replaced = await uploadFace(owner.access_token, students[0].id)
+    expect(replaced.status).toBe(201)
+    const details = (await replaced.json()).data
+    expect(details.photos).toHaveLength(1)
+    expect(details.sync_status).toBe('pending')
+    const photo = await request(new URL(details.photos[0].url).pathname + new URL(details.photos[0].url).search)
+    expect(photo.status).toBe(200)
+    expect(photo.headers.get('Content-Type')).toBe('image/jpeg')
+    const tampered = new URL(details.photos[0].url)
+    tampered.searchParams.set('sig', 'AAAA')
+    expect((await request(tampered.pathname + tampered.search)).status).toBe(403)
+
+    expect((await request('/api/face/device/pending')).status).toBe(401)
+    expect((await request('/api/face/device/pending', { headers: { Authorization: 'Bearer kfd_wrong-token-value-123456789' } })).status).toBe(401)
+    const auth = { Authorization: `Bearer ${device.token}` }
+    const pending = (await (await request('/api/face/device/pending', { headers: auth })).json()).data
+    expect(pending.items).toHaveLength(3)
+    expect(pending.items[0].photos[0].url).toContain('/api/face-photo/faces/')
+    const byStudent = new Map(pending.items.map((item) => [item.student_id, item]))
+    const synced = await request('/api/face/device/sync-result', {
+      method: 'POST',
+      headers: auth,
+      body: { results: pending.items.map((item) => ({ employee_no: item.employee_no, version: item.version, status: 'synced' })) },
+    })
+    expect((await synced.json()).data.updated).toBe(3)
+    await env.DB.prepare("UPDATE face_sync SET synced_at = '2026-01-01T00:00:00.000Z' WHERE device_id = ?").bind(device.id).run()
+    const overview = (await (await request('/api/face/overview', { token: reception.access_token })).json()).data
+    expect(overview.students.find((row) => row.student_id === students[0].id).sync_status).toBe('synced')
+
+    const [present, late, absent] = students.map((student) => byStudent.get(student.id).employee_no)
+    const first = await request('/api/face/device/events', { method: 'POST', headers: auth, body: acsEvent(present, `${lessonDate}T13:10:00+05:00`) })
+    expect((await first.json()).data).toMatchObject({ accepted: 1, duplicates: 0 })
+    const duplicate = await request('/api/face/device/events', { method: 'POST', headers: auth, body: acsEvent(present, `${lessonDate}T13:10:00+05:00`) })
+    expect((await duplicate.json()).data).toMatchObject({ accepted: 0, duplicates: 1 })
+    const ignored = await request('/api/face/device/events', { method: 'POST', headers: auth, body: { AcsEvent: { InfoList: [{ major: 5, minor: 76, time: `${lessonDate}T14:00:00+05:00`, employeeNoString: late }] } } })
+    expect((await ignored.json()).data).toMatchObject({ accepted: 0, ignored: 1 })
+
+    const boundary = 'MIME_boundary'
+    const multipart = [
+      `--${boundary}`,
+      'Content-Disposition: form-data; name="event_log"',
+      'Content-Type: application/json',
+      '',
+      JSON.stringify({
+        dateTime: `${lessonDate}T14:12:40+05:00`,
+        eventType: 'AccessControllerEvent',
+        AccessControllerEvent: { majorEventType: 5, subEventType: 75, employeeNoString: late, serialNo: 99 },
+      }),
+      `--${boundary}`,
+      'Content-Disposition: form-data; name="Picture"; filename="face.jpg"',
+      'Content-Type: image/jpeg',
+      '',
+      '\u00ff\u00d8binary',
+      `--${boundary}--`,
+      '',
+    ].join('\r\n')
+    const pushed = await worker.fetch(new Request(`https://school.test/api/face/device/events?token=${device.token}`, {
+      method: 'POST',
+      headers: { 'Content-Type': `multipart/form-data; boundary=${boundary}` },
+      body: multipart,
+    }), env)
+    expect((await pushed.json()).data).toMatchObject({ accepted: 1 })
+
+    const rows = async () => new Map(((await env.DB.prepare('SELECT * FROM attendance WHERE group_id = ? AND date = ?')
+      .bind(groupId, lessonDate).all()).results || []).map((row) => [row.student_id, row]))
+    let marks = await rows()
+    expect(marks.get(students[0].id)).toMatchObject({ status: 'present', source: 'face', late_minutes: 0 })
+    expect(marks.get(students[1].id)).toMatchObject({ status: 'late', source: 'face', late_minutes: 12 })
+    expect(marks.has(students[2].id)).toBe(false)
+
+    const beforeEnd = await finalizeFaceAbsences(env, { date: lessonDate, now: new Date(`${lessonDate}T15:32:00+05:00`) })
+    expect(beforeEnd).toEqual({ closed: 0, absent: 0 })
+    const closed = await finalizeFaceAbsences(env, { date: lessonDate, now: new Date(`${lessonDate}T15:40:00+05:00`) })
+    expect(closed).toEqual({ closed: 1, absent: 1 })
+    expect(await finalizeFaceAbsences(env, { date: lessonDate, now: new Date(`${lessonDate}T16:00:00+05:00`) })).toEqual({ closed: 0, absent: 0 })
+    marks = await rows()
+    expect(marks.get(students[2].id)).toMatchObject({ status: 'absent', source: 'face' })
+    expect(marks.get(students[0].id).status).toBe('present')
+
+    const manual = (values) => request('/api/db', {
+      method: 'POST',
+      token: owner.access_token,
+      body: { table: 'attendance', action: 'upsert', conflict: 'student_id,group_id,date', values },
+    })
+    const blocked = await manual({ student_id: students[1].id, group_id: groupId, date: lessonDate, status: 'present', note: '' })
+    expect(blocked.status).toBe(409)
+    expect((await blocked.json()).error.message).toContain('FACE_ID_LOCKED')
+    const autoAbsentFix = await manual({ student_id: students[2].id, group_id: groupId, date: lessonDate, status: 'present', note: '' })
+    expect(autoAbsentFix.status).toBe(200)
+    const confirmed = await manual({ student_id: students[1].id, group_id: groupId, date: lessonDate, status: 'present', note: '', override_face: true })
+    expect(confirmed.status).toBe(200)
+    marks = await rows()
+    expect(marks.get(students[1].id)).toMatchObject({ status: 'present', source: 'manual', late_minutes: null })
+    expect(marks.get(students[2].id)).toMatchObject({ status: 'present', source: 'manual' })
+
+    const late2 = await request('/api/face/device/events', { method: 'POST', headers: auth, body: acsEvent(late, `${lessonDate}T14:20:00+05:00`) })
+    expect((await late2.json()).data.accepted).toBe(1)
+    expect((await rows()).get(students[1].id).source).toBe('manual')
+
+    const removed = await request(`/api/students/${students[2].id}`, { method: 'POST', token: owner.access_token, body: { action: 'delete' } })
+    expect(removed.status).toBe(200)
+    const deletion = (await (await request('/api/face/device/pending', { headers: auth })).json()).data.items
+    expect(deletion).toEqual([expect.objectContaining({ employee_no: absent, action: 'delete', photos: [] })])
   })
 })

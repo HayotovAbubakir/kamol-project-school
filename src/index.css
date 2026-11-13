@@ -1,3 +1,4 @@
+@layer theme, base, utilities;
 @import "tailwindcss/theme.css" layer(theme);
 @import "tailwindcss/utilities.css" layer(utilities);
 
@@ -172,12 +173,15 @@
   --chart-neon-danger: #fb7185;
 }
 
-* {
-  margin: 0;
-  padding: 0;
-  box-sizing: border-box;
-  -webkit-user-select: none;
-  user-select: none;
+/* Reset sits in the base layer: unlayered it silently overrode every Tailwind spacing utility (mt-*, ml-*, p-*). */
+@layer base {
+  * {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+    -webkit-user-select: none;
+    user-select: none;
+  }
 }
 
 input,
@@ -1230,7 +1234,8 @@ h1, h2, h3, .display { font-family: inherit; font-weight: 700; }
 
 .notif-toast-host {
   position: fixed;
-  top: 18px;
+  /* Under the topbar, never on top of it. */
+  top: 92px;
   right: 18px;
   z-index: 1200;
   display: flex;
@@ -1304,8 +1309,9 @@ h1, h2, h3, .display { font-family: inherit; font-weight: 700; }
 }
 
 @media (max-width: 720px) {
+  /* Below the topbar (8px layout gap + 64px bar) so the menu button stays tappable. */
   .notif-toast-host {
-    top: 12px;
+    top: calc(max(8px, env(safe-area-inset-top, 0px)) + 72px);
     right: 12px;
     left: 12px;
     width: auto;
@@ -3718,7 +3724,8 @@ tbody tr:hover td:last-child,
 .modal-backdrop {
   position: fixed;
   inset: 0;
-  z-index: 360;
+  /* Mobil pastki menyu (400) va ochiq sidebar (500) ustida, toast (1200) va select (1400) ostida */
+  z-index: 1000;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -3753,7 +3760,7 @@ tbody tr:hover td:last-child,
 }
 
 .light .modal-panel {
-  background: rgba(255, 255, 255, 0.55);
+  background: rgba(255, 255, 255, 0.8);
   border-color: rgba(255, 255, 255, 0.7);
   backdrop-filter: blur(22px) saturate(1.35);
   -webkit-backdrop-filter: blur(22px) saturate(1.35);
@@ -3809,6 +3816,12 @@ tbody tr:hover td:last-child,
 .modal-panel input[type="time"] {
   min-width: 0;
   width: 100%;
+}
+
+.input[type="time"],
+.input[type="date"] {
+  padding-inline: 12px;
+  font-variant-numeric: tabular-nums;
 }
 
 .modal-body::-webkit-scrollbar {
@@ -3932,7 +3945,8 @@ tbody tr:hover td:last-child,
 
 .schedule-slot-times {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  /* "09:00 AM" + picker icon needs ~8.5rem; narrower slots stack the two times. */
+  grid-template-columns: repeat(auto-fit, minmax(8.5rem, 1fr));
   gap: 8px;
   min-width: 0;
 }
@@ -4977,6 +4991,16 @@ html.nav-drawer-open body::-webkit-scrollbar {
 
 /* ── Very small phones (≤ 400px) ── */
 @media (max-width: 400px) {
+  .mobile-bottom-nav-item {
+    padding-inline: 0;
+  }
+
+  .mobile-bottom-nav-label {
+    padding: 0;
+    font-size: 11px;
+    letter-spacing: -0.01em;
+  }
+
   .stat-grid,
   .stat-grid-3,
   .stat-grid-4,

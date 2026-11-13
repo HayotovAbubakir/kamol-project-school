@@ -155,6 +155,11 @@ export const domainTranslations = {
     'domain.error.dataLoadFailed': 'Не удалось загрузить данные',
     'domain.error.authProviderRequired': 'useAuth должен использоваться внутри AuthProvider',
     'domain.error.dataProviderRequired': 'useData должен использоваться внутри DataProvider',
+    'domain.expense.operational': 'Операционные',
+    'domain.error.fileTypeInvalid': 'Загрузите только изображение или видео',
+    'domain.error.fileTooLarge': 'Файл не должен превышать 80 МБ',
+    'domain.error.fileNotSelected': 'Файл не выбран',
+    'domain.error.languageProviderRequired': 'useLanguage должен использоваться внутри LanguageProvider',
   },
   en: {
     'domain.weekday.monday': 'Monday',
@@ -231,5 +236,10 @@ export const domainTranslations = {
     'domain.error.dataLoadFailed': 'Failed to load data',
     'domain.error.authProviderRequired': 'useAuth must be used within AuthProvider',
     'domain.error.dataProviderRequired': 'useData must be used within DataProvider',
+    'domain.expense.operational': 'Operational',
+    'domain.error.fileTypeInvalid': 'Upload an image or video only',
+    'domain.error.fileTooLarge': 'The file must be 80 MB or smaller',
+    'domain.error.fileNotSelected': 'No file selected',
+    'domain.error.languageProviderRequired': 'useLanguage must be used within LanguageProvider',
   },
 }

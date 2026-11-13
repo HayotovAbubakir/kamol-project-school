@@ -32,6 +32,9 @@ const screenLabels = {
   finance: 'Moliya',
   reports: 'Hisobotlar',
   settings: 'Sozlamalar',
+  debtors: 'Qarzdorlar',
+  absent: 'Bugun kelmaganlar',
+  schedule: 'Haftalik jadval',
 }
 
 function profileFor(role) {
@@ -65,6 +68,7 @@ async function installMocks(page, role, scheme = 'light', { signedIn = true, sch
     parent_phone: '+998909876543',
     login: 'ali.valiyev',
     monthly_fee: 350000,
+    telegram_id: 'telegram-student',
   }
   const records = {
     homework: [{ ...task }],
@@ -203,6 +207,7 @@ async function installMocks(page, role, scheme = 'light', { signedIn = true, sch
     }
     if (pathname === `/api/students/${student.id}/telegram/unlink`) {
       records.profiles[0].telegram_id = null
+      student.telegram_id = null
       return json({ data: { ok: true } })
     }
 
@@ -305,9 +310,9 @@ test.describe('Mini App screens and visual overflow', () => {
   ]
   const roles = [
     { role: 'student', extra: ['payments', 'settings'], detail: true },
-    { role: 'teacher', extra: ['questions'], detail: true },
-    { role: 'reception', extra: ['homework', 'attendance', 'profile'] },
-    { role: 'owner', extra: ['homework', 'payments', 'attendance', 'questions', 'reports', 'settings'] },
+    { role: 'teacher', extra: ['questions', 'schedule'], detail: true },
+    { role: 'reception', extra: ['debtors', 'absent', 'schedule', 'homework', 'attendance', 'settings'] },
+    { role: 'owner', extra: ['debtors', 'absent', 'schedule', 'homework', 'payments', 'attendance', 'questions', 'reports', 'settings'] },
   ]
 
   for (const { role, extra, detail } of roles) {
@@ -388,7 +393,7 @@ test.describe('Mini App role flows', () => {
       await page.screenshot({ path: testInfo.outputPath(`reception-${viewport.width}x${viewport.height}-student-form.png`), fullPage: true })
       await page.getByLabel('Ism va familiya').fill('Abdulloh Ziyayev')
       await page.getByLabel('Telefon', { exact: true }).fill('+998901112233')
-      const passwordInput = page.getByLabel('O‘quvchi paroli (kamida 6 belgi)')
+      const passwordInput = page.getByLabel('Parol', { exact: true })
       await passwordInput.focus()
       await expect(page.locator('main.miniapp')).toHaveClass(/mini-keyboard-open/)
       await expect.poll(async () => {
@@ -400,8 +405,8 @@ test.describe('Mini App role flows', () => {
         return rect.top >= 0 && rect.bottom <= window.innerHeight
       })).toBe(true)
       await passwordInput.fill('Kamol2026!')
-      await page.getByRole('button', { name: 'O‘quvchini yaratish' }).click()
-      await expect(page.getByText('Login: abdulloh.ziyayev')).toBeVisible()
+      await page.locator('#mini-student-form').getByRole('button', { name: 'Qo‘shish', exact: true }).click()
+      await expect(page.getByRole('button', { name: 'abdulloh.ziyayev' })).toBeVisible()
       expect(fixtures.getCreatedStudent()?.login).toBe('abdulloh.ziyayev')
       await assertNoHorizontalOverflow(page)
     })
@@ -440,7 +445,7 @@ test.describe('Mini App role flows', () => {
       await installMocks(page, 'owner')
       await page.setViewportSize(viewport)
       await page.goto('/miniapp.html')
-      await expect(page.getByText('Shu oy moliyasi')).toBeVisible()
+      await expect(page.getByText('Shu oy foyda')).toBeVisible()
       await expect(page.getByText(/6[,\s\u00a0\u202f]600[,\s\u00a0\u202f]000 so‘m/)).toBeVisible()
       await assertNoHorizontalOverflow(page)
     })
@@ -541,7 +546,7 @@ test.describe('Mini App role flows', () => {
     await installMocks(teacherPage, 'teacher', 'light', { scheduleScenario })
     await teacherPage.goto('/miniapp.html')
     await teacherPage.getByRole('navigation', { name: 'Asosiy menyu' }).getByRole('button', { name: 'Guruhlar', exact: true }).click()
-    await expect(teacherPage.getByText(/O‘zgartirilgan/)).toBeVisible()
+    await expect(teacherPage.getByText(/O‘zgartirildi/)).toBeVisible()
     await expect(teacherPage.getByText(/11:00–12:00/)).toBeVisible()
     await teacherPage.getByRole('button', { name: /Bildirishnomalar/ }).click()
     await expect(teacherPage.getByText(/Yangi vaqt: 11:00–12:00/)).toBeVisible()

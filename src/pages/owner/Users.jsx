@@ -17,6 +17,7 @@ import { staff as staffAccounts } from '../../lib/data/index.js'
 import { telegram } from '../../lib/data/index.js'
 import { useDialog } from '../../context/DialogContext'
 import { loginBaseFromName } from '../../../shared/account-credentials.js'
+import { translate as tr } from '../../i18n/runtime'
 
 export default function OwnerUsers() {
   const { refresh } = useData()
@@ -83,7 +84,7 @@ export default function OwnerUsers() {
       return
     }
     if ((!editingId || password) && password.length < 12) {
-      setError('Xodim paroli kamida 12 belgidan iborat bo‘lishi kerak.')
+      setError(tr('Xodim paroli kamida 12 belgidan iborat bo‘lishi kerak.'))
       return
     }
     setSaving(true)
@@ -133,12 +134,12 @@ export default function OwnerUsers() {
             <h2>{selected.name}</h2>
             <p>@{selected.username}</p>
           </div>
-          <StatusBadge tone={selected.is_active ? 'success' : 'danger'}>{selected.is_active ? 'Faol' : 'Nofaol'}</StatusBadge>
+          <StatusBadge tone={selected.is_active ? 'success' : 'danger'}>{selected.is_active ? tr('Faol') : tr('Nofaol')}</StatusBadge>
         </div>
         <div className="detail-meta-grid">
           <div className="detail-meta-item"><span>{t('common.login')}</span><strong>{selected.username}</strong></div>
-          <div className="detail-meta-item"><span>{t('owner.users.role')}</span><strong>{selected.role === 'teacher' ? 'O‘qituvchi' : 'Qabulxona'}</strong></div>
-          <div className="detail-meta-item"><span>Telefon</span><strong>{selected.phone || '—'}</strong></div>
+          <div className="detail-meta-item"><span>{t('owner.users.role')}</span><strong>{selected.role === 'teacher' ? tr('O‘qituvchi') : tr('Qabulxona')}</strong></div>
+          <div className="detail-meta-item"><span>{tr('Telefon')}</span><strong>{selected.phone || '—'}</strong></div>
         </div>
         <GlowButton
           className="btn-outline btn-sm"
@@ -154,30 +155,30 @@ export default function OwnerUsers() {
             setReceptionOpen(true)
           }}
         >
-          <Pencil size={14} /> Tahrirlash
+          <Pencil size={14} /> {tr('Tahrirlash')}
         </GlowButton>
         <GlowButton
         className="btn-outline btn-sm"
         onClick={resetAdminPassword}
         >
-        <KeyRound size={14} /> Parolni tiklash
+        <KeyRound size={14} /> {tr('Parolni tiklash')}
         </GlowButton>
         {!selected.telegram_id && (
           <GlowButton className="btn-outline btn-sm" onClick={createTelegramInvite} disabled={creatingInvite}>
-            <Link size={14} /> {creatingInvite ? 'Tayyorlanmoqda…' : 'Mini App uchun Telegram havolasi'}
+            <Link size={14} /> {creatingInvite ? tr('Tayyorlanmoqda…') : tr('Mini App uchun Telegram havolasi')}
           </GlowButton>
         )}
         {telegramInvite && (
           <div className="detail-meta-grid">
-            <p className="detail-meta-item">Havola 15 daqiqa va bir marta ishlaydi.</p>
-            <a className="btn btn-outline btn-sm" href={telegramInvite} target="_blank" rel="noreferrer">Telegram’da ochish</a>
+            <p className="detail-meta-item">{tr('Havola 15 daqiqa va bir marta ishlaydi.')}</p>
+            <a className="btn btn-outline btn-sm" href={telegramInvite} target="_blank" rel="noreferrer">{tr('Telegram’da ochish')}</a>
             <GlowButton className="btn-outline btn-sm" onClick={async () => {
               try {
                 await navigator.clipboard.writeText(telegramInvite)
               } catch (copyError) {
                 setError(copyError.message || 'Havolani nusxalab bo‘lmadi.')
               }
-            }}><Copy size={14} /> Havolani nusxalash</GlowButton>
+            }}><Copy size={14} /> {tr('Havolani nusxalash')}</GlowButton>
           </div>
         )}
         <GlowButton
@@ -191,7 +192,7 @@ export default function OwnerUsers() {
             }
           }}
         >
-          {selected.is_active ? 'Akkauntni faolsizlantirish' : 'Akkauntni faollashtirish'}
+          {selected.is_active ? tr('Akkauntni faolsizlantirish') : tr('Akkauntni faollashtirish')}
         </GlowButton>
       </>
     )
@@ -200,8 +201,8 @@ export default function OwnerUsers() {
   return (
     <PageEnter>
       <PageHeader
-        title="Xodimlar"
-        subtitle="Qabulxona va o‘qituvchi akkauntlarini boshqarish"
+        title={tr('Xodimlar')}
+        subtitle={tr('Qabulxona va o‘qituvchi akkauntlarini boshqarish')}
         actions={
           <GlowButton
             className="btn-primary"
@@ -213,13 +214,13 @@ export default function OwnerUsers() {
               setReceptionOpen(true)
             }}
           >
-          <Plus size={16} /> Xodim qo‘shish
+          <Plus size={16} /> {tr('Xodim qo‘shish')}
           </GlowButton>
         }
       />
 
       <div className="stat-grid">
-        <StatCard label="Xodim akkauntlari" value={receptionUsers.length} icon={Shield} tone="success" />
+        <StatCard label={tr('Xodim akkauntlari')} value={receptionUsers.length} icon={Shield} tone="success" />
       </div>
 
       {receptionUsers.length > 0 ? (
@@ -233,7 +234,7 @@ export default function OwnerUsers() {
                   avatar={<Avatar name={receptionUser.name} size="sm" />}
                   title={receptionUser.name}
                   subtitle={`@${receptionUser.username}`}
-                  badge={<StatusBadge tone={receptionUser.is_active ? 'success' : 'danger'}>{receptionUser.is_active ? 'Faol' : 'Nofaol'}</StatusBadge>}
+                  badge={<StatusBadge tone={receptionUser.is_active ? 'success' : 'danger'}>{receptionUser.is_active ? tr('Faol') : tr('Nofaol')}</StatusBadge>}
                   onClick={() => {
                     setSelectedId(receptionUser.id)
                     setTelegramInvite('')
@@ -245,12 +246,12 @@ export default function OwnerUsers() {
           detail={renderDetail()}
         />
       ) : (
-            <div className="master-detail-empty">Xodim akkauntlari yo‘q.</div>
+            <div className="master-detail-empty">{tr('Xodim akkauntlari yo‘q.')}</div>
       )}
 
       <Modal
         open={receptionOpen}
-        title={editingId ? 'Xodim ma’lumotlarini tahrirlash' : 'Xodim akkaunti'}
+        title={editingId ? tr('Xodim ma’lumotlarini tahrirlash') : tr('Xodim akkaunti')}
         onClose={() => {
           setReceptionOpen(false)
           setEditingId(null)
@@ -272,14 +273,14 @@ export default function OwnerUsers() {
             <input className="input" value={receptionForm.name} onChange={(e) => setReceptionForm((current) => ({ ...current, name: e.target.value, username: autoUsername ? loginBaseFromName(e.target.value) : current.username }))} required />
           </div>
           <div className="field">
-            <label>Telefon</label>
+            <label>{tr('Telefon')}</label>
             <input className="input" type="tel" value={receptionForm.phone} onChange={(e) => setReceptionForm({ ...receptionForm, phone: e.target.value })} />
           </div>
           <div className="field">
-            <label>Rol</label>
+            <label>{tr('Rol')}</label>
             <select className="input" value={receptionForm.role} onChange={(e) => setReceptionForm({ ...receptionForm, role: e.target.value })}>
-              <option value="reception">Qabulxona</option>
-              <option value="teacher">O‘qituvchi</option>
+              <option value="reception">{tr('Qabulxona')}</option>
+              <option value="teacher">{tr('O‘qituvchi')}</option>
             </select>
           </div>
           <div className="field">
@@ -288,7 +289,7 @@ export default function OwnerUsers() {
             <small>Ism.familiya — lotin harflarida; band bo‘lsa avtomatik raqam qo‘shiladi.</small>
           </div>
           <div className="field">
-            <label>{editingId ? 'Yangi parol (ixtiyoriy)' : `${t('common.password')} (kamida 12 belgi)`}</label>
+            <label>{editingId ? tr('Yangi parol (ixtiyoriy)') : `${t('common.password')} (kamida 12 belgi)`}</label>
             <input
               type="password"
               className="input"

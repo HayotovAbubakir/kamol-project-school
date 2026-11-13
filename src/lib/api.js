@@ -5,6 +5,7 @@ import { translate } from '../i18n/runtime'
 import { normalizePhone, packParentPhones, parseParentPhones } from './phone'
 import { loginBaseFromName } from '../../shared/account-credentials.js'
 import { normalizeScheduleWeekdays } from '../../shared/schedule.js'
+import { groupFeeHistoryByGroup } from '../../shared/fees.js'
 
 function requireClient() {
   if (!cloudflare) throw new Error('Cloudflare Worker API is unavailable.')
@@ -166,6 +167,9 @@ function mapAttendance(row) {
     note: row.note || '',
     markedBy: row.marked_by,
     markedAt: row.marked_at,
+    source: row.source || 'manual',
+    checkedInAt: row.checked_in_at || null,
+    lateMinutes: row.late_minutes ?? null,
   }
 }
 
@@ -198,16 +202,21 @@ export async function loadAll(role = 'owner') {
     expensesRes,
     attendanceRes,
   ] = await Promise.all([
-    isOwner ? db.from('profiles').select('*').order('created_at') : Promise.resolve({ data: [], error: null }),
-    db.from('teachers').select('*').order('created_at'),
-    db.from('groups').select('*').order('created_at'),
-    db.from('students').select('*').order('created_at'),
-    db.from('group_students').select('*'),
-    (isOwner || isReception) ? db.from('payments').select('*').order('paid_at') : Promise.resolve({ data: [], error: null }),
-    isOwner ? db.from('salary_payments').select('*').order('paid_at') : Promise.resolve({ data: [], error: null }),
-    isOwner ? db.from('expenses').select('*').order('date', { ascending: false }) : Promise.resolve({ data: [], error: null }),
-    db.from('attendance').select('*').order('date', { ascending: false }),
+    isOwner ? db.from('profiles').select('*').order('created_at').all() : Promise.resolve({ data: [], error: null }),
+    db.from('teachers').select('*').order('created_at').all(),
+    db.from('groups').select('*').order('created_at').all(),
+    db.from('students').select('*').order('created_at').all(),
+    db.from('group_students').select('*').order('group_id').all(),
+    (isOwner || isReception) ? db.from('payments').select('*').order('paid_at').all() : Promise.resolve({ data: [], error: null }),
+    isOwner ? db.from('salary_payments').select('*').order('paid_at').all() : Promise.resolve({ data: [], error: null }),
+    isOwner ? db.from('expenses').select('*').order('date', { ascending: false }).all() : Promise.resolve({ data: [], error: null }),
+    db.from('attendance').select('*').order('date', { ascending: false }).all(),
   ])
+  // Narx tarixi ixtiyoriy: migratsiya hali qo‘llanmagan bazada joriy narx ishlatiladi.
+  const feeHistoryRes = (isOwner || isReception)
+    ? await db.from('group_fee_history').select('group_id, monthly_fee, valid_from').order('group_id').all()
+    : { data: [], error: null }
+  const feeHistoryByGroup = groupFeeHistoryByGroup(feeHistoryRes.error ? [] : feeHistoryRes.data || [])
 
   const firstError = [
     profilesRes, teachersRes, groupsRes, studentsRes,
@@ -232,7 +241,10 @@ export async function loadAll(role = 'owner') {
     const state = scheduleByGroup.get(g.id)
     const activeVersion = (state?.versions || [])
       .filter((version) => version.valid_from <= today && (!version.valid_to || today < version.valid_to))
-      .sort((left, right) => left.valid_from.localeCompare(right.valid_from))
+      // shared/schedule.js getEffectiveLesson bilan bir xil tartib: valid_from, created_at, id.
+      .sort((left, right) => String(left.valid_from).localeCompare(String(right.valid_from))
+        || String(left.created_at || '').localeCompare(String(right.created_at || ''))
+        || String(left.id || '').localeCompare(String(right.id || '')))
       .at(-1)
     const schedule = activeVersion?.schedule
       ? (Array.isArray(activeVersion.schedule) ? activeVersion.schedule : JSON.parse(activeVersion.schedule))
@@ -241,6 +253,7 @@ export async function loadAll(role = 'owner') {
       ...mapGroup({ ...g, schedule }, studentIdsByGroup[g.id] || []),
       scheduleVersions: state?.versions || [],
       scheduleOverrides: state?.overrides || [],
+      feeHistory: feeHistoryByGroup.get(g.id) || [],
     }
   })
   const students = (studentsRes.data || []).map((s) => {
@@ -511,14 +524,22 @@ export async function updateGroup(id, updates, currentGroups = []) {
   }
 
   if (updates.studentIds) {
-    const nextIds = updates.studentIds.map(asUuidOrNull).filter(Boolean)
-    const { error: delError } = await db.from('group_students').delete().eq('group_id', id)
-    if (delError) throwDbError(delError, 'domain.error.groupSaveFailed')
-    if (nextIds.length) {
+    // Faqat farqni yozamiz: xato bo‘lsa ham guruh to‘liq bo‘shab qolmaydi.
+    const nextIds = [...new Set(updates.studentIds.map(asUuidOrNull).filter(Boolean))]
+    const currentIds = new Set(existing.studentIds || [])
+    const removed = [...currentIds].filter((studentId) => !nextIds.includes(studentId))
+    const added = nextIds.filter((studentId) => !currentIds.has(studentId))
+    if (added.length) {
       const { error: insError } = await db.from('group_students').insert(
-        nextIds.map((studentId) => ({ group_id: id, student_id: studentId })),
+        added.map((studentId) => ({ group_id: id, student_id: studentId })),
       )
       if (insError) throwDbError(insError, 'domain.error.groupSaveFailed')
+    }
+    if (removed.length) {
+      const { error: delError } = await db.from('group_students').delete()
+        .eq('group_id', id)
+        .in('student_id', removed)
+      if (delError) throwDbError(delError, 'domain.error.groupSaveFailed')
     }
   }
 }
@@ -615,24 +636,10 @@ export async function resetUserCredentials(user) {
 }
 
 export async function deleteStudent(id) {
-  const db = requireClient()
-
-  // To‘lovlar moliya hisobotida qolishi uchun ismni oldindan yozib qo‘yamiz
-  const { data: student } = await db
-    .from('students')
-    .select('name')
-    .eq('id', id)
-    .maybeSingle()
-
-  if (student?.name) {
-    const { error: nameError } = await db
-      .from('payments')
-      .update({ student_name: student.name })
-      .eq('student_id', id)
-    if (nameError) throwDbError(nameError, 'domain.error.dataLoadFailed')
-  }
-
-  const { error } = await db.from('students').delete().eq('id', id)
+  // Worker to‘lovlarni ism bilan saqlab qoladi va akkauntni bir amalda yopadi.
+  const { error } = await requireClient().functions.invoke(`students/${encodeURIComponent(id)}`, {
+    body: { action: 'delete' },
+  })
   if (error) throw error
 }
 
@@ -663,6 +670,7 @@ export async function addPayment(payload) {
     studentName = student?.name || ''
   }
 
+  const method = ['cash', 'card', 'transfer'].includes(payload.method) ? payload.method : null
   const { error } = await db.from('payments').insert({
     student_id: payload.studentId,
     student_name: studentName,
@@ -670,6 +678,7 @@ export async function addPayment(payload) {
     month,
     year,
     paid_at: payload.paidAt || new Date().toISOString(),
+    ...(method ? { method } : {}),
   })
   if (error) throw error
 }
@@ -753,7 +762,7 @@ export async function deleteExpense(id) {
   if (error) throw error
 }
 
-export async function markAttendance({ studentId, groupId, status, note, markedBy }) {
+export async function markAttendance({ studentId, groupId, status, note, markedBy, overrideFace = false }) {
   const db = requireClient()
   if (!studentId || !groupId) throw new Error(translate('domain.error.attendanceSelectionRequired'))
   if (!['present', 'late', 'absent'].includes(status)) throw new Error(translate('domain.error.attendanceStatusInvalid'))
@@ -766,6 +775,7 @@ export async function markAttendance({ studentId, groupId, status, note, markedB
     note: note || '',
     marked_by: markedBy || null,
     marked_at: new Date().toISOString(),
+    ...(overrideFace ? { override_face: true } : {}),
   }, { onConflict: 'student_id,group_id,date' })
   if (error) throw error
 }

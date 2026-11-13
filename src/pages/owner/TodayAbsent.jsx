@@ -21,7 +21,7 @@ export default function TodayAbsent() {
   const { t } = useLanguage()
   const navigate = useNavigate()
   const { pathname } = useLocation()
-  const home = pathname.startsWith('/admin') ? '/admin' : '/owner'
+  const home = pathname.startsWith('/reception') ? '/reception' : '/owner'
   const today = todayISO()
 
   const list = useMemo(() => getTodayAbsentStudents(data, today), [data, today])

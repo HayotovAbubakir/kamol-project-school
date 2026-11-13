@@ -18,9 +18,9 @@ function getInitialLanguage() {
 
 export function LanguageProvider({ children }) {
   const [language, setLanguageState] = useState(getInitialLanguage)
+  setRuntimeLanguage(language)
 
   useEffect(() => {
-    setRuntimeLanguage(language)
     localStorage.setItem(STORAGE_KEY, language)
     document.documentElement.lang = language
   }, [language])

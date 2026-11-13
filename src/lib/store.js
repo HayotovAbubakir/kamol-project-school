@@ -1,5 +1,6 @@
 import { currentMonthYear, dateParts, timesOverlap, timeToMinutes, todayISO } from './utils'
 import { translate } from '../i18n/runtime'
+import { groupFeeForMonth } from '../../shared/fees.js'
 
 /** Pure helpers kept for charts / UI (no localStorage). */
 
@@ -91,13 +92,20 @@ export function amountPaidForMonth(payments, studentId, month, year) {
     .reduce((sum, p) => sum + (Number(p.amount) || 0), 0)
 }
 
-/** O‘quvchi to‘lovi = a’zo bo‘lgan guruhlar oylik to‘lovlari yig‘indisi */
-export function studentMonthlyFee(student, groups = []) {
+/** Guruh narxi: oy berilsa — o‘sha oydagi narx (narx tarixi bo‘yicha), aks holda hozirgi narx. */
+export function groupMonthlyFee(group, month, year) {
+  if (!group) return 0
+  if (!month || !year) return Number(group.monthlyFee) || 0
+  return groupFeeForMonth(group.monthlyFee, group.feeHistory, month, year)
+}
+
+/** O‘quvchi to‘lovi = a’zo bo‘lgan guruhlar oylik to‘lovlari yig‘indisi (oy berilsa — o‘sha oy narxida). */
+export function studentMonthlyFee(student, groups = [], month, year) {
   const ids = student?.groupIds || []
   if (!ids.length) return 0
   return ids.reduce((sum, groupId) => {
     const group = groups.find((g) => g.id === groupId)
-    return sum + (Number(group?.monthlyFee) || 0)
+    return sum + groupMonthlyFee(group, month, year)
   }, 0)
 }
 
@@ -124,7 +132,7 @@ export function isStudentDebtor(payments, studentId, month, year, monthlyFee = 0
 
 export function remainingFee(student, payments, month, year, groups = null) {
   const fee = groups
-    ? studentMonthlyFee(student, groups)
+    ? studentMonthlyFee(student, groups, month, year)
     : (Number(student?.monthlyFee) || 0)
   return Math.max(0, fee - amountPaidForMonth(payments, student?.id, month, year))
 }
@@ -132,9 +140,9 @@ export function remainingFee(student, payments, month, year, groups = null) {
 /** To‘lovni guruh ulushiga taqsimlash (ko‘p guruhda proporsional) */
 export function amountAttributedToGroup(payments, student, group, groups, month, year) {
   const paid = amountPaidForMonth(payments, student?.id, month, year)
-  const groupFee = Number(group?.monthlyFee) || 0
+  const groupFee = groupMonthlyFee(group, month, year)
   if (groupFee <= 0 || paid <= 0) return 0
-  const totalFee = studentMonthlyFee(student, groups)
+  const totalFee = studentMonthlyFee(student, groups, month, year)
   if (totalFee <= 0) return 0
   if (totalFee === groupFee) return paid
   return paid * (groupFee / totalFee)
@@ -158,7 +166,7 @@ export function recentMonthYears(count = 6) {
 
 /** Guruh bo‘yicha oy moliyasi: kerak / to‘langan / qoldiq + o‘quvchilar */
 export function getGroupMonthFinance(group, members, payments, groups, month, year) {
-  const fee = Number(group?.monthlyFee) || 0
+  const fee = groupMonthlyFee(group, month, year)
   const expected = members.length * fee
   let collected = 0
   const rows = members.map((student) => {
@@ -188,12 +196,9 @@ export function getGroupMonthFinance(group, members, payments, groups, month, ye
 export function getFinanceSummary(data) {
   const { month, year } = currentMonthYear()
   const studentIncome = data.payments
-    .filter((p) => Number(p.month) === month && Number(p.year) === year)
+    .filter((p) => !p.voidedAt && Number(p.month) === month && Number(p.year) === year)
     .reduce((sum, p) => sum + (Number(p.amount) || 0), 0)
-  const expected = data.students.reduce((sum, s) => {
-    const fee = Number(s.monthlyFee) || studentMonthlyFee(s, data.groups)
-    return sum + fee
-  }, 0)
+  const expected = data.students.reduce((sum, s) => sum + studentMonthlyFee(s, data.groups, month, year), 0)
   const remaining = Math.max(0, expected - studentIncome)
   const salaryPaid = data.salaryPayments
     .filter((p) => {

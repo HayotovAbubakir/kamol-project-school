@@ -56,7 +56,6 @@ export default function App() {
               <Route path="finance" element={<OwnerFinance />} />
               <Route path="finance/paid" element={<OwnerPaid />} />
               <Route path="finance/debtors" element={<OwnerDebtors />} />
-              <Route path="attendance/absent-today" element={<TodayAbsent />} />
               <Route path="notifications" element={<OwnerNotifications />} />
               <Route path="questions" element={<Questions />} />
               <Route path="settings/appearance" element={<Navigate to="/owner/settings/fon" replace />} />
@@ -80,6 +79,7 @@ export default function App() {
               <Route path="settings/appearance" element={<Navigate to="/reception/settings/fon" replace />} />
               <Route path="settings/fon" element={<AppearanceSettings />} />
               <Route path="attendance" element={<AdminAttendance />} />
+              <Route path="attendance/absent-today" element={<TodayAbsent />} />
               <Route path="payments" element={<Navigate to="/reception/payments/debtors" replace />} />
               <Route path="payments/debtors" element={<OwnerDebtors />} />
               <Route path="questions" element={<Questions />} />

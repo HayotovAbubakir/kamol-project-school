@@ -1,7 +1,9 @@
 import { adminTranslations } from './adminTranslations'
 import { commonTranslations } from './commonTranslations'
 import { domainTranslations } from './domainTranslations'
+import { faceTranslations } from './faceTranslations'
 import { ownerTranslations } from './ownerTranslations'
+import { phraseTranslations } from './phraseTranslations'
 import { sharedTranslations } from './sharedTranslations'
 import { teacherTranslations } from './teacherTranslations'
 
@@ -16,10 +18,12 @@ function mergeDictionaries(...dictionaries) {
 }
 
 export const translations = mergeDictionaries(
+  phraseTranslations,
   commonTranslations,
   sharedTranslations,
   adminTranslations,
   ownerTranslations,
   teacherTranslations,
   domainTranslations,
+  faceTranslations,
 )

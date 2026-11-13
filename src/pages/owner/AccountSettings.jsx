@@ -2,6 +2,7 @@ import { Eye, EyeOff, KeyRound } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { Navigate } from 'react-router-dom'
 import GlassPane from '../../components/GlassPane'
+import FaceDevicesSection from '../../components/face/FaceDevicesSection.jsx'
 import { PageEnter } from '../../components/motion/PageMotion'
 import { useAuth } from '../../context/AuthContext'
 import { useLanguage } from '../../context/LanguageContext'
@@ -146,6 +147,7 @@ export default function OwnerAccountSettings() {
           </form>
         </section>
       </GlassPane>
+      <FaceDevicesSection />
     </PageEnter>
   )
 }

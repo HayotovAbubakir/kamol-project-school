@@ -71,8 +71,23 @@ export function localDateISO(date = new Date()) {
   return `${y}-${m}-${day}`
 }
 
+export const SCHOOL_TIME_ZONE = 'Asia/Tashkent'
+
+/** Maktab (Asia/Tashkent) kalendari bo‘yicha sana qismlari. Qurilma vaqt zonasi ta’sir qilmaydi. */
+export function schoolDateParts(date = new Date()) {
+  const parts = Object.fromEntries(new Intl.DateTimeFormat('en-CA', {
+    timeZone: SCHOOL_TIME_ZONE,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(date instanceof Date ? date : new Date(date)).map(({ type, value }) => [type, value]))
+  return { year: Number(parts.year), month: Number(parts.month), day: Number(parts.day) }
+}
+
+/** Bugungi sana Asia/Tashkent bo‘yicha (YYYY-MM-DD). */
 export function todayISO() {
-  return localDateISO(new Date())
+  const { year, month, day } = schoolDateParts()
+  return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`
 }
 
 /** Date-only strings stay calendar-local; timestamps use the user's timezone. */
@@ -90,9 +105,10 @@ export function dateParts(value) {
   return { year: d.getFullYear(), month: d.getMonth() + 1, day: d.getDate() }
 }
 
+/** Joriy oy va yil Asia/Tashkent bo‘yicha. */
 export function currentMonthYear() {
-  const now = new Date()
-  return { month: now.getMonth() + 1, year: now.getFullYear() }
+  const { month, year } = schoolDateParts()
+  return { month, year }
 }
 
 export function uid(prefix = 'id') {

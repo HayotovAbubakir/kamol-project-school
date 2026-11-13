@@ -148,36 +148,60 @@ export async function getStudentGroups(db, studentId) {
   return data || []
 }
 
+/** Asia/Tashkent bo‘yicha bugungi sana (YYYY-MM-DD). Worker UTC’da ishlaydi. */
+export function tashkentDateISO(date = new Date()) {
+  const parts = Object.fromEntries(new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Tashkent',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(date).map(({ type, value }) => [type, value]))
+  return `${parts.year}-${parts.month}-${parts.day}`
+}
+
+export function tashkentMonthYear(date = new Date()) {
+  const [year, month] = tashkentDateISO(date).split('-').map(Number)
+  return { month, year }
+}
+
+/** Bekor qilingan (voided) to‘lovlar hisobga olinmaydi. */
 export async function getPaymentsForStudent(db, studentId, limit = 8) {
+  if (typeof db.getActivePayments === 'function') return db.getActivePayments(studentId, { limit })
   const { data, error } = await db.from('payments')
-    .select('amount, month, year, paid_at')
+    .select('amount, month, year, paid_at, voided_at')
     .eq('student_id', studentId)
     .order('paid_at', { ascending: false })
-    .limit(limit)
+    .limit(Math.min(500, limit * 2))
   if (error) throw error
-  return data || []
+  return (data || []).filter((row) => !row.voided_at).slice(0, limit)
 }
 
 export async function getAttendanceForStudent(db, studentId, days = 14) {
-  const since = new Date()
-  since.setDate(since.getDate() - days)
+  const today = new Date(`${tashkentDateISO()}T12:00:00Z`)
+  today.setUTCDate(today.getUTCDate() - days)
   const { data, error } = await db.from('attendance')
     .select('date, status, note, group_id, groups(name)')
     .eq('student_id', studentId)
-    .gte('date', since.toISOString().slice(0, 10))
+    .gte('date', today.toISOString().slice(0, 10))
     .order('date', { ascending: false })
   if (error) throw error
   return data || []
 }
 
 export async function getMonthPaid(db, studentId, month, year) {
-  const { data, error } = await db.from('payments')
-    .select('amount')
-    .eq('student_id', studentId)
-    .eq('month', month)
-    .eq('year', year)
-  if (error) throw error
-  return (data || []).reduce((sum, row) => sum + (Number(row.amount) || 0), 0)
+  const rows = typeof db.getActivePayments === 'function'
+    ? await db.getActivePayments(studentId, { month, year, limit: 1000 })
+    : await (async () => {
+      const { data, error } = await db.from('payments')
+        .select('amount, voided_at')
+        .eq('student_id', studentId)
+        .eq('month', month)
+        .eq('year', year)
+        .limit(500)
+      if (error) throw error
+      return (data || []).filter((row) => !row.voided_at)
+    })()
+  return rows.reduce((sum, row) => sum + (Number(row.amount) || 0), 0)
 }
 
 export async function getChatsForStudent(db, studentId) {

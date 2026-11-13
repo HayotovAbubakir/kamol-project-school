@@ -36,7 +36,9 @@ await telegram('setWebhook', {
   allowed_updates: ['message', 'callback_query'],
   drop_pending_updates: false,
 })
-await telegram('setMyCommands', { commands: BOT_COMMANDS })
+// Buyruqlar faqat shaxsiy chatlarda ko‘rinadi; guruhlardagi eski ro‘yxat tozalanadi.
+await telegram('deleteMyCommands', { scope: { type: 'default' } })
+await telegram('setMyCommands', { commands: BOT_COMMANDS, scope: { type: 'all_private_chats' } })
 await telegram('setChatMenuButton', {
   menu_button: {
     type: 'web_app',

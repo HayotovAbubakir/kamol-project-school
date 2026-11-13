@@ -1,9 +1,17 @@
 import { z } from 'zod'
 import { Bot } from 'grammy'
-import { registerHandlers } from '../bot/handlers.mjs'
+import { registerHandlers, splitTelegramText } from '../bot/handlers.mjs'
 import { attendancePush, paymentPush } from '../bot/messages.mjs'
 import { calculateFinanceSummary, validateGroupSchedule } from './domain.js'
 import { hashInviteCode, verifyTelegramInitData } from './telegram-auth.js'
+import {
+  faceAttendanceNotice,
+  finalizeFaceAbsences,
+  forgetStudentFaces,
+  handleFaceDeviceRoutes,
+  handleFacePhoto,
+  handleFaceStaffRoutes,
+} from './face-id.js'
 import { canAccessEndpoint, canAccessTable as roleCanAccessTable } from '../shared/role-permissions.js'
 import { isValidLogin, loginBaseFromName } from '../shared/account-credentials.js'
 import {
@@ -17,9 +25,10 @@ const TABLES = new Set([
   'profiles', 'teachers', 'groups', 'students', 'telegram_links', 'group_students',
   'payments', 'salary_payments', 'expenses', 'attendance', 'staff_codes',
   'homework', 'homework_submissions', 'monthly_homework_report',
-  'payment_audit', 'homework_review_history',
+  'payment_audit', 'homework_review_history', 'group_fee_history',
 ])
-const READ_ONLY = new Set(['monthly_homework_report', 'payment_audit', 'homework_review_history'])
+// `group_fee_history` faqat D1 trigger orqali yoziladi (guruh narxi o‘zgarganda).
+const READ_ONLY = new Set(['monthly_homework_report', 'payment_audit', 'homework_review_history', 'group_fee_history'])
 const WRITABLE = new Set([...TABLES].filter((table) => !READ_ONLY.has(table)))
 const STAFF = new Set(['owner', 'reception'])
 const PASSWORD_ITERATIONS = 100000
@@ -30,10 +39,11 @@ const COLUMNS = {
   students: ['id', 'name', 'phone', 'parent_phone', 'monthly_fee', 'joined_at', 'public_code', 'login', 'telegram_id', 'created_at'],
   telegram_links: ['chat_id', 'student_id', 'linked_at'],
   group_students: ['group_id', 'student_id'],
+  group_fee_history: ['id', 'group_id', 'monthly_fee', 'valid_from', 'created_at'],
   payments: ['id', 'student_id', 'student_name', 'amount', 'month', 'year', 'paid_at', 'method', 'note', 'voided_at', 'voided_by', 'void_reason', 'updated_at', 'updated_by', 'created_at'],
   salary_payments: ['id', 'teacher_id', 'amount', 'paid_at', 'created_at'],
   expenses: ['id', 'title', 'amount', 'category', 'date', 'recorded_by', 'created_at'],
-  attendance: ['id', 'student_id', 'group_id', 'date', 'status', 'note', 'marked_by', 'marked_at'],
+  attendance: ['id', 'student_id', 'group_id', 'date', 'status', 'note', 'marked_by', 'marked_at', 'source', 'checked_in_at', 'late_minutes'],
   staff_codes: ['id', 'code', 'role', 'user_id', 'created_by', 'is_active', 'created_at'],
   homework: ['id', 'group_id', 'teacher_id', 'title', 'description', 'due_at', 'deadline', 'file_url', 'created_at', 'updated_at'],
   homework_submissions: ['id', 'homework_id', 'student_id', 'attempt_number', 'file_url', 'text_answer', 'content_text', 'video_note_url', 'voice_url', 'status', 'state', 'student_result', 'student_reason', 'teacher_result', 'feedback', 'review_note', 'submitted_at', 'reviewed_by', 'reviewed_at', 'expires_at', 'created_at'],
@@ -341,6 +351,20 @@ async function signFileUrl(env, origin, key) {
   return `${origin}/api/files/${key}?exp=${expires}&sig=${base64UrlEncodeBytes(new Uint8Array(signature))}`
 }
 
+/** Saqlangan imzoli havola 1 soatda eskiradi; o‘qishda yangisi beriladi (yuklashda ruxsat baribir tekshiriladi). */
+async function refreshFileUrl(env, origin, value) {
+  if (!env.AUTH_SECRET) return value
+  try {
+    const parsed = new URL(value, origin)
+    if (!parsed.pathname.startsWith('/api/files/')) return value
+    const key = decodeURIComponent(parsed.pathname.slice('/api/files/'.length))
+    if (!['homework/', 'questions/'].some((prefix) => key.startsWith(prefix)) || key.includes('..')) return value
+    return await signFileUrl(env, origin, key)
+  } catch {
+    return value
+  }
+}
+
 async function handleFileDownload(request, env, profile) {
   if (!env.FILES || !env.AUTH_SECRET) return fail('File service is not configured.', 503)
   let key
@@ -576,7 +600,6 @@ function createWorkerBotDb(env, origin) {
             versions: state.versions,
             overrides: state.overrides,
           })) {
-            if (lesson.status === 'rescheduled') continue
             lessons.push({
               ...lesson,
               groupName: group.name,
@@ -660,7 +683,37 @@ function createWorkerBotDb(env, origin) {
         const result = await response.json()
         throw new Error(result.error || 'Vazifani topshirib bo‘lmadi.')
       }
+      // Topshirilgandan keyin keyingi matn yangi qoralama ochib yubormasin.
+      await env.DB.prepare('DELETE FROM bot_pending_homework WHERE chat_id = ?').bind(Number(chatId)).run()
       return true
+    },
+    async clearPendingHomework(chatId) {
+      await env.DB.prepare('DELETE FROM bot_pending_homework WHERE chat_id = ?').bind(Number(chatId)).run()
+    },
+    /** Chat bog‘lanishini va shu Telegram foydalanuvchisining o‘quvchi akkauntiga ulanishini uzadi. */
+    async unlinkTelegramUser(chatId, telegramId) {
+      const statements = [
+        env.DB.prepare('DELETE FROM bot_pending_homework WHERE chat_id = ?').bind(Number(chatId)),
+        env.DB.prepare('DELETE FROM telegram_links WHERE chat_id = ?').bind(Number(chatId)),
+      ]
+      if (Number.isSafeInteger(Number(telegramId)) && Number(telegramId) > 0) {
+        statements.push(
+          env.DB.prepare("UPDATE profiles SET telegram_id = NULL WHERE telegram_id = ? AND role = 'student'").bind(Number(telegramId)),
+          env.DB.prepare('UPDATE students SET telegram_id = NULL WHERE telegram_id = ?').bind(Number(telegramId)),
+        )
+      }
+      await env.DB.batch(statements)
+    },
+    async getActivePayments(studentId, { month, year, limit = 50 } = {}) {
+      const filters = ['student_id = ?', 'voided_at IS NULL']
+      const args = [studentId]
+      if (month && year) {
+        filters.push('month = ?', 'year = ?')
+        args.push(Number(month), Number(year))
+      }
+      const rows = await env.DB.prepare(`SELECT amount, month, year, paid_at, method FROM payments
+        WHERE ${filters.join(' AND ')} ORDER BY paid_at DESC LIMIT ?`).bind(...args, Math.min(Number(limit) || 50, 1000)).all()
+      return rows.results || []
     },
     async getHomeworkDraftState(chatId, homeworkId) {
       const link = await env.DB.prepare('SELECT student_id FROM telegram_links WHERE chat_id = ?')
@@ -728,9 +781,47 @@ async function getWorkerBot(env, origin) {
   return bot
 }
 
+function telegramErrorCode(error) {
+  return Number(error?.error_code || error?.error?.error_code || 0)
+}
+
+/**
+ * Bitta chatga xabar yuboradi (4096 belgidan uzun matn bo‘laklarga bo‘linadi).
+ * 400/403 (bot bloklangan, chat topilmadi) — doimiy xato: o‘tkazib yuboriladi.
+ * Vaqtinchalik xato (429, 5xx, tarmoq) `throwTransient` bo‘lsa qayta tashlanadi.
+ */
+async function deliverTelegram(bot, chatId, text, { throwTransient = false, extra } = {}) {
+  try {
+    const chunks = splitTelegramText(text)
+    for (const [index, chunk] of chunks.entries()) {
+      await bot.api.sendMessage(chatId, chunk, index === chunks.length - 1 ? extra : undefined)
+    }
+    return true
+  } catch (error) {
+    const code = telegramErrorCode(error)
+    const permanent = code === 400 || code === 403
+    console.error('Telegram delivery failed', { code, permanent })
+    if (throwTransient && !permanent) throw error
+    return false
+  }
+}
+
+async function timingSafeEqualText(left, right) {
+  const key = await crypto.subtle.importKey('raw', crypto.getRandomValues(new Uint8Array(32)), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign'])
+  const [a, b] = await Promise.all([
+    crypto.subtle.sign('HMAC', key, encoder.encode(String(left || ''))),
+    crypto.subtle.sign('HMAC', key, encoder.encode(String(right || ''))),
+  ])
+  const x = new Uint8Array(a)
+  const y = new Uint8Array(b)
+  let diff = 0
+  for (let index = 0; index < x.length; index += 1) diff |= x[index] ^ y[index]
+  return diff === 0
+}
+
 async function handleTelegramWebhook(request, env) {
   if (!env.TELEGRAM_BOT_TOKEN || !env.TELEGRAM_WEBHOOK_SECRET) return fail('Telegram webhook is not configured.', 503)
-  if (request.headers.get('X-Telegram-Bot-Api-Secret-Token') !== env.TELEGRAM_WEBHOOK_SECRET) {
+  if (!(await timingSafeEqualText(request.headers.get('X-Telegram-Bot-Api-Secret-Token'), env.TELEGRAM_WEBHOOK_SECRET))) {
     return fail('Telegram webhook authorization failed.', 401)
   }
   let update
@@ -774,13 +865,23 @@ async function processBotEvents(env) {
       let text
       if (event.table_name === 'attendance') {
         const group = await env.DB.prepare('SELECT name FROM groups WHERE id = ?').bind(row.group_id).first()
-        text = attendancePush({
-          studentName: student?.name || 'O‘quvchi',
-          groupName: group?.name || '—',
-          status: row.status,
-          date: row.date,
-          note: row.note,
-        })
+        // Face ID: faqat kechikish va kelmaganlik haqida xabar beriladi.
+        text = row.source === 'face'
+          ? faceAttendanceNotice({
+            studentName: student?.name,
+            groupName: group?.name,
+            status: row.status,
+            lateMinutes: row.late_minutes,
+            date: row.date,
+            checkedInAt: row.checked_in_at,
+          })
+          : attendancePush({
+            studentName: student?.name || 'O‘quvchi',
+            groupName: group?.name || '—',
+            status: row.status,
+            date: row.date,
+            note: row.note,
+          })
       } else {
         text = paymentPush({
           studentName: row.student_name || student?.name || 'O‘quvchi',
@@ -789,18 +890,19 @@ async function processBotEvents(env) {
           year: row.year,
         })
       }
-      for (const { chat_id: chatId } of chats.results || []) {
-        await bot.api.sendMessage(chatId, text)
+      for (const { chat_id: chatId } of text ? chats.results || [] : []) {
+        await deliverTelegram(bot, chatId, text, { throwTransient: true })
       }
     } else if (row.student_id && event.table_name === 'homework_submissions') {
       const homework = await env.DB.prepare('SELECT id, title, teacher_id FROM homework WHERE id = ?')
         .bind(row.homework_id).first()
       const student = await env.DB.prepare('SELECT name FROM students WHERE id = ?').bind(row.student_id).first()
       if (row.status === 'pending') {
-        const teachers = await env.DB.prepare('SELECT telegram_id FROM profiles WHERE teacher_id = ? AND telegram_id IS NOT NULL')
+        const teachers = await env.DB.prepare(`SELECT telegram_id FROM profiles
+          WHERE role = 'teacher' AND teacher_id = ? AND telegram_id IS NOT NULL`)
           .bind(homework?.teacher_id || '').all()
         for (const { telegram_id: telegramId } of teachers.results || []) {
-          await bot.api.sendMessage(telegramId, `Yangi topshiriq yuborildi.\nO‘quvchi: ${student?.name || 'O‘quvchi'}\nVazifa: ${homework?.title || 'Uy vazifasi'}`)
+          await deliverTelegram(bot, telegramId, `Yangi topshiriq yuborildi.\nO‘quvchi: ${student?.name || 'O‘quvchi'}\nVazifa: ${homework?.title || 'Uy vazifasi'}`, { throwTransient: true })
         }
       } else if (['approved', 'rejected'].includes(row.status)) {
         const chats = await env.DB.prepare('SELECT chat_id FROM telegram_links WHERE student_id = ?')
@@ -808,7 +910,7 @@ async function processBotEvents(env) {
         const status = row.status === 'approved' ? 'qabul qilindi' : 'qayta ishlash uchun qaytarildi'
         const comment = row.feedback || row.review_note ? `\nIzoh: ${row.feedback || row.review_note}` : ''
         for (const { chat_id: chatId } of chats.results || []) {
-          await bot.api.sendMessage(chatId, `Uy vazifangiz ${status}.\nVazifa: ${homework?.title || 'Uy vazifasi'}${comment}`)
+          await deliverTelegram(bot, chatId, `Uy vazifangiz ${status}.\nVazifa: ${homework?.title || 'Uy vazifasi'}${comment}`, { throwTransient: true })
         }
       }
     }
@@ -833,8 +935,10 @@ export async function expireHomeworkDrafts(env) {
         ])
         const bot = await getWorkerBot(env, env.TELEGRAM_WEBAPP_URL ? new URL(env.TELEGRAM_WEBAPP_URL).origin : 'https://localhost')
         for (const { chat_id: chatId } of chats.results || []) {
-          await bot.api.sendMessage(chatId,
-            `“${homework?.title || 'Uy vazifasi'}” uchun draft 24 soat ichida yuborilmagani sababli tugadi. Vazifa hali ochiq bo‘lsa, Mini App’dan qayta boshlang.`)
+          await env.DB.prepare('DELETE FROM bot_pending_homework WHERE chat_id = ? AND homework_id = ?')
+            .bind(chatId, submission.homework_id).run()
+          await deliverTelegram(bot, chatId,
+            `“${homework?.title || 'Uy vazifasi'}” uchun qoralama 24 soat ichida yuborilmagani sababli bekor bo‘ldi. Vazifa hali ochiq bo‘lsa, botga faylni qayta yuboring yoki ilovadan qayta boshlang.`)
         }
       } catch (error) {
         console.error('Homework draft expiry reminder failed', error instanceof Error ? error.name : 'UnknownError')
@@ -1097,6 +1201,20 @@ async function selectRows(env, profile, body, service) {
   return rows
 }
 
+const FACE_ID_LOCKED_MESSAGE = 'FACE_ID_LOCKED: Bu davomat Face ID orqali belgilangan. O‘zgartirish uchun tasdiqlang.'
+
+/** Qo‘lda belgilangan davomat: manba `manual`; Face ID skani faqat aniq tasdiq bilan almashtiriladi. */
+async function prepareManualAttendance(env, row, overrideFace) {
+  row.source = 'manual'
+  delete row.checked_in_at
+  row.date ||= tashkentToday()
+  const minutes = Number(row.late_minutes)
+  row.late_minutes = row.status === 'late' && Number.isInteger(minutes) && minutes >= 0 && minutes <= 600 ? minutes : null
+  const existing = await env.DB.prepare('SELECT source, checked_in_at FROM attendance WHERE student_id = ? AND group_id = ? AND date = ?')
+    .bind(row.student_id, row.group_id, row.date).first()
+  if (existing?.source === 'face' && existing.checked_in_at && !overrideFace) throw new Error(FACE_ID_LOCKED_MESSAGE)
+}
+
 async function mutateRows(env, profile, body, service) {
   const { table, action, filters = [], values, conflict } = body
   if (!WRITABLE.has(table) || !['insert', 'upsert', 'update', 'delete'].includes(action)) throw new Error('Invalid write operation')
@@ -1113,6 +1231,8 @@ async function mutateRows(env, profile, body, service) {
     const outputs = []
     for (const source of records) {
       const row = { ...source }
+      const overrideFace = table === 'attendance' && (row.override_face === true || row.override_face === 1)
+      if (table === 'attendance') delete row.override_face
       if (Object.keys(row).some((column) => !allowedColumns.has(column))) throw new Error('Invalid columns')
       if (!service && table === 'homework_submissions') {
         if (profile.role === 'student') {
@@ -1135,6 +1255,7 @@ async function mutateRows(env, profile, body, service) {
       }
       if (table === 'groups') await validateGroupScheduleWrite(env, row)
       if (!service && !(await authorizeRow(env, profile, table, row, 'insert'))) throw new Error('Access denied')
+      if (!service && table === 'attendance') await prepareManualAttendance(env, row, overrideFace)
       const columns = Object.keys(row)
       if (!columns.length || columns.some((column) => !/^[a-z_][a-z0-9_]*$/i.test(column))) throw new Error('Invalid columns')
       const sql = `INSERT ${action === 'upsert' ? 'OR IGNORE' : ''} INTO "${table}" (${columns.map((column) => `"${column}"`).join(',')}) VALUES (${columns.map(() => '?').join(',')})`
@@ -1189,7 +1310,14 @@ async function mutateRows(env, profile, body, service) {
     const patch = { ...values }
     const auditReason = table === 'payments' && typeof patch.reason === 'string' ? patch.reason : ''
     if (table === 'payments') delete patch.reason
+    const overrideFace = table === 'attendance' && (patch.override_face === true || patch.override_face === 1)
+    if (table === 'attendance') delete patch.override_face
     if (Object.keys(patch).some((column) => !allowedColumns.has(column))) throw new Error('Invalid columns')
+    if (!service && table === 'attendance') {
+      if (row.source === 'face' && row.checked_in_at && !overrideFace) throw new Error(FACE_ID_LOCKED_MESSAGE)
+      patch.source = 'manual'
+      delete patch.checked_in_at
+    }
     if (!service && table === 'payments' && row.voided_at) throw new Error('Bekor qilingan to‘lovni tuzatib bo‘lmaydi.')
     if (!service && table === 'profiles') {
       for (const forbidden of ['role', 'id', 'teacher_id', 'student_id']) delete patch[forbidden]
@@ -1581,6 +1709,33 @@ async function validateStudentGroups(env, groupIds) {
   return ids
 }
 
+/**
+ * O‘quvchini o‘chiradi: to‘lovlar moliya tarixida ism bilan qoladi (student_id NULL bo‘ladi),
+ * a’zolik, davomat va vazifalar CASCADE bilan o‘chadi. Akkaunt audit yozuvlariga bog‘langan
+ * bo‘lsa o‘chirilmaydi — faolsizlantiriladi va login bo‘shatiladi.
+ */
+async function deleteStudentRecord(env, student) {
+  const accountId = student.auth_user_id || student.account_id || null
+  await forgetStudentFaces(env, student.id)
+  await env.DB.batch([
+    env.DB.prepare('UPDATE payments SET student_name = ? WHERE student_id = ?').bind(student.name, student.id),
+    env.DB.prepare('DELETE FROM telegram_links WHERE student_id = ?').bind(student.id),
+    env.DB.prepare('DELETE FROM students WHERE id = ?').bind(student.id),
+  ])
+  if (accountId) {
+    try {
+      await env.DB.prepare('DELETE FROM accounts WHERE id = ?').bind(accountId).run()
+    } catch {
+      await env.DB.batch([
+        env.DB.prepare('UPDATE accounts SET is_active = 0, session_version = session_version + 1 WHERE id = ?').bind(accountId),
+        env.DB.prepare('UPDATE profiles SET telegram_id = NULL, student_id = NULL, username = ? WHERE id = ?')
+          .bind(`deleted-${accountId}`, accountId),
+      ])
+    }
+  }
+  return json({ data: { id: student.id, deleted: true } })
+}
+
 async function handleStudentRecords(request, env, actor, pathname) {
   if (!actor || !['owner', 'reception'].includes(actor.role)) return fail('Ruxsat yo‘q.', actor ? 403 : 401)
   if (pathname === '/api/students' && request.method !== 'POST') return fail('Method not allowed.', 405)
@@ -1640,12 +1795,14 @@ async function handleStudentRecords(request, env, actor, pathname) {
     return json({ data: { id: studentId, name: parsed.data.name, username, phone: parsed.data.phone, parent_phone: parsed.data.parent_phone, group_ids: groupIds, public_code: publicCode, telegram_linked: false } }, 201)
   }
   const match = pathname.match(/^\/api\/students\/([^/]+)$/)
-  if (action !== 'update' || request.method !== 'POST' || !match) return fail('O‘quvchi endpointi topilmadi.', 404)
+  if (!['update', 'delete'].includes(action) || request.method !== 'POST' || !match) return fail('O‘quvchi endpointi topilmadi.', 404)
   const studentId = match[1]
   const student = await env.DB.prepare(`SELECT s.*, p.id AS account_id, p.username AS account_username
     FROM students s LEFT JOIN profiles p ON p.id = s.auth_user_id AND p.role = 'student'
     WHERE s.id = ?`).bind(studentId).first()
   if (!student) return fail('O‘quvchi topilmadi.', 404)
+  if (action === 'delete') return deleteStudentRecord(env, student)
+  delete body.action
   const parsed = z.object({
     name: z.string().trim().min(3).max(160).optional(),
     phone: z.string().trim().max(40).optional(),
@@ -1911,7 +2068,7 @@ async function botStudentHomework(request, env) {
         SELECT MAX(latest.attempt_number) FROM homework_submissions latest
         WHERE latest.homework_id = h.id AND latest.student_id = gs.student_id
       )
-    WHERE gs.student_id = ? AND (hs.id IS NULL OR hs.state = 'draft' OR hs.status = 'rejected')
+    WHERE gs.student_id = ? AND (hs.id IS NULL OR hs.state IN ('draft', 'expired') OR hs.status = 'rejected')
     ORDER BY h.due_at LIMIT 50`).bind(link.student_id).all()
   return json({ data: rows.results || [] })
 }
@@ -2024,6 +2181,12 @@ async function handleDatabase(request, env, profile, service) {
   try {
     if (!body.action || body.action === 'select') {
       const rows = await selectRows(env, profile, body, service)
+      if (['homework', 'homework_submissions'].includes(body.table)) {
+        const origin = new URL(request.url).origin
+        await Promise.all(rows.map(async (row) => {
+          if (row?.file_url) row.file_url = await refreshFileUrl(env, origin, row.file_url)
+        }))
+      }
       const data = body.maybeSingle ? rows[0] ?? null : rows
       return json({ data, error: null })
     }
@@ -2031,7 +2194,7 @@ async function handleDatabase(request, env, profile, service) {
     return json({ data, error: null })
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
-    const status = /access denied/i.test(message) ? 403 : 400
+    const status = /access denied/i.test(message) ? 403 : message.startsWith('FACE_ID_LOCKED') ? 409 : 400
     return json({ data: null, error: { message } }, status)
   }
 }
@@ -2292,14 +2455,20 @@ async function notifyTeacherOfSubmission(env, submission, submittedAt) {
       proofKind: proof?.kind,
     })
     for (const { telegram_id: chatId } of teachers.results) {
-      await bot.api.sendMessage(chatId, text, {
-        reply_markup: { inline_keyboard: [[{ text: 'Ilovada ochish', url: appUrl.toString() }]] },
+      // Bir o‘qituvchiga yetkazilmasa ham qolganlariga yuborilaveradi.
+      const sent = await deliverTelegram(bot, chatId, text, {
+        extra: { reply_markup: { inline_keyboard: [[{ text: 'Ilovada ochish', url: appUrl.toString() }]] } },
       })
-      if (proof?.telegram_chat_id && proof.telegram_message_id) {
-        await bot.api.copyMessage(chatId, proof.telegram_chat_id, proof.telegram_message_id)
-      } else if (proof?.telegram_file_id) {
-        if (proof.kind === 'video_note') await bot.api.sendVideoNote(chatId, proof.telegram_file_id)
-        else await bot.api.sendVoice(chatId, proof.telegram_file_id)
+      if (!sent) continue
+      try {
+        if (proof?.telegram_chat_id && proof.telegram_message_id) {
+          await bot.api.copyMessage(chatId, proof.telegram_chat_id, proof.telegram_message_id)
+        } else if (proof?.telegram_file_id) {
+          if (proof.kind === 'video_note') await bot.api.sendVideoNote(chatId, proof.telegram_file_id)
+          else await bot.api.sendVoice(chatId, proof.telegram_file_id)
+        }
+      } catch (error) {
+        console.error('Teacher proof forward failed', { code: telegramErrorCode(error) })
       }
     }
   } catch (error) {
@@ -2357,16 +2526,17 @@ async function getStudentMiniAppOverview(request, env, profile) {
       teacher_id: row.teacher_id,
       title: row.title,
       description: row.description,
-      file_url: row.file_url,
+      file_url: row.file_url ? await refreshFileUrl(env, new URL(request.url).origin, row.file_url) : null,
       due_at: row.due_at,
       groups: { name: row.group_name },
       submission,
     }
   }))
   const [paymentRows, attendanceRows, groupRows] = await Promise.all([
-    env.DB.prepare(`SELECT id, student_id, student_name, amount, month, year, paid_at
+    env.DB.prepare(`SELECT id, student_id, student_name, amount, month, year, paid_at, method, voided_at
       FROM payments WHERE student_id = ? ORDER BY paid_at DESC LIMIT 100`).bind(profile.student_id).all(),
-    env.DB.prepare(`SELECT a.id, a.student_id, a.group_id, a.date, a.status, a.note, g.name AS group_name
+    env.DB.prepare(`SELECT a.id, a.student_id, a.group_id, a.date, a.status, a.note, a.source, a.checked_in_at,
+        a.late_minutes, g.name AS group_name
       FROM attendance a LEFT JOIN groups g ON g.id = a.group_id
       WHERE a.student_id = ? ORDER BY a.date DESC LIMIT 100`).bind(profile.student_id).all(),
     env.DB.prepare(`SELECT g.id, g.name, g.teacher_id, g.schedule
@@ -2578,10 +2748,12 @@ async function notifyQuestionReceivers(env, origin, studentId, text) {
     try {
       const student = await env.DB.prepare('SELECT name FROM students WHERE id = ?').bind(studentId).first()
       const bot = await getWorkerBot(env, origin)
+      let delivered = 0
       for (const recipient of recipients.results) {
-        await bot.api.sendMessage(recipient.telegram_id,
-          `Yangi savol keldi.\nO‘quvchi: ${student?.name || 'O‘quvchi'}\nMatn: ${text.slice(0, 1000)}`)
+        if (await deliverTelegram(bot, recipient.telegram_id,
+          `Yangi savol keldi.\nO‘quvchi: ${student?.name || 'O‘quvchi'}\nMatn: ${text.slice(0, 1000)}`)) delivered += 1
       }
+      if (!delivered) notificationFailed = true
     } catch (error) {
       notificationFailed = true
       console.error('Reception question notification failed', error instanceof Error ? error.name : 'UnknownError')
@@ -2705,7 +2877,7 @@ async function handleQuestions(request, env, profile, pathname) {
           .bind(new Date().toISOString(), ...ticketIds).run()
       }
     }
-    for (const ticket of tickets) ticket.unread_count = 0
+    // `unread_count` — shu ochilishdan oldin o‘qilmagan xabarlar soni; ro‘yxatda “N yangi” belgisi uchun.
     return json({ data: tickets })
   }
   const match = pathname.match(/^\/api\/questions\/([^/]+)\/(reply|close)$/)
@@ -2733,10 +2905,14 @@ async function handleQuestions(request, env, profile, pathname) {
     updated_at = CURRENT_TIMESTAMP WHERE id = ?`).bind(ticket.id).run()
   const chats = await env.DB.prepare('SELECT chat_id FROM telegram_links WHERE student_id = ?')
     .bind(ticket.student_id).all()
-  let deliveryFailed = false
+  let deliveryFailed
   try {
     const bot = await getWorkerBot(env, new URL(request.url).origin)
-    for (const chat of chats.results || []) await bot.api.sendMessage(chat.chat_id, `Maktab javobi:\n${parsed.data.text}`)
+    const results = []
+    for (const chat of chats.results || []) {
+      results.push(await deliverTelegram(bot, chat.chat_id, `Maktab javobi:\n${parsed.data.text}`))
+    }
+    deliveryFailed = results.length > 0 && !results.some(Boolean)
   } catch (error) {
     deliveryFailed = true
     console.error('Question reply delivery failed', error instanceof Error ? error.name : 'UnknownError')
@@ -3769,6 +3945,8 @@ async function handleRequest(request, env) {
   if (url.pathname === '/api/telegram/webhook' && request.method === 'POST') return handleTelegramWebhook(request, env)
   if (url.pathname === '/api/auth/seed-owner' && request.method === 'POST') return handleOwnerSeed(request, env)
   if (url.pathname.startsWith('/api/bot/')) return handleBot(request, env, url.pathname)
+  if (url.pathname.startsWith('/api/face/device/')) return handleFaceDeviceRoutes(request, env, url)
+  if (url.pathname.startsWith('/api/face-photo/') && request.method === 'GET') return handleFacePhoto(request, env)
   if ((url.pathname === '/api/auth/telegram' || url.pathname === '/api/telegram-auth') && request.method === 'POST') return telegramLogin(request, env)
   if (url.pathname === '/api/auth/telegram/password' && request.method === 'POST') return telegramPasswordLogin(request, env)
   if (url.pathname === '/api/auth/login' && request.method === 'POST') return authLogin(request, env)
@@ -3847,6 +4025,9 @@ async function handleRequest(request, env) {
     && !['/api/auth/me', '/api/auth/logout', '/api/auth/update'].includes(url.pathname)) {
     return fail('Davom etish uchun parolni yangilang.', 403)
   }
+  if (url.pathname.startsWith('/api/face/') || /^\/api\/students\/[^/]+\/faces(?:\/[^/]+)?$/.test(url.pathname)) {
+    return handleFaceStaffRoutes(request, env, profile, url.pathname)
+  }
   if (url.pathname === '/api/finance/summary' && request.method === 'GET') {
     return handleFinanceSummary(request, env, profile)
   }
@@ -3913,7 +4094,8 @@ function secureResponse(response, origin) {
   headers.set('X-Content-Type-Options', 'nosniff')
   headers.set('X-Frame-Options', 'SAMEORIGIN')
   headers.set('Referrer-Policy', 'strict-origin-when-cross-origin')
-  headers.set('Permissions-Policy', 'camera=(), microphone=(), geolocation=()')
+  // Mikrofon — Mini App ovozli tasdig‘i, kamera — o‘quvchining Face ID rasmlari uchun.
+  headers.set('Permissions-Policy', 'camera=(self), microphone=(self), geolocation=()')
   headers.set('Strict-Transport-Security', 'max-age=31536000; includeSubDomains')
   if (!headers.has('Content-Security-Policy')) {
     headers.set('Content-Security-Policy', "default-src 'self'; script-src 'self' https://telegram.org; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: blob:; font-src 'self' data: https://fonts.gstatic.com; connect-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'self'; form-action 'self'")
@@ -3935,7 +4117,7 @@ export default {
     if (request.method === 'OPTIONS') {
       const response = new Response(null, { status: 204, headers: {
         'Access-Control-Allow-Headers': 'Authorization, Content-Type, X-Bot-Secret, X-Migration-Secret',
-        'Access-Control-Allow-Methods': 'GET, POST, PUT, OPTIONS',
+        'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
         'Access-Control-Max-Age': '600',
       } })
       return secureResponse(response, requestOrigin ? configuredOrigin : null)
@@ -3963,6 +4145,7 @@ export default {
       processBotEvents(env),
       expireHomeworkDrafts(env),
       processScheduleNotificationOutbox(env),
+      finalizeFaceAbsences(env),
     ]).catch((error) => {
       console.error('Scheduled tasks failed', error instanceof Error ? error.name : 'UnknownError')
     }))
