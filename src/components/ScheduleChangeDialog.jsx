@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Modal, StatusBadge } from './ui'
+import Select from './Select'
 import { useAuth } from '../context/AuthContext'
 import { useData } from '../context/DataContext'
 import {
@@ -253,20 +254,25 @@ export default function ScheduleChangeDialog({ group, initialSlotId = '', onClos
               </button>
               <label>
                 <span>{tr('Dars')}</span>
-                <select className="input" value={slotId} onChange={(event) => changeField(setSlotId, event.target.value)}>
-                  <option value="">{tr('Darsni tanlang')}</option>
-                  {slots.map((slot, index) => {
-                    const id = String(slot.slotId || `slot-${index}`)
-                    return <option key={id} value={id}>{slot.startTime}–{slot.endTime}</option>
-                  })}
-                </select>
+                <Select
+                  value={slotId}
+                  onChange={(event) => changeField(setSlotId, event.target.value)}
+                  options={[
+                    { value: '', label: tr('Darsni tanlang') },
+                    ...slots.map((slot, index) => ({ value: String(slot.slotId || `slot-${index}`), label: `${slot.startTime}–${slot.endTime}` })),
+                  ]}
+                />
               </label>
               <label>
                 <span>{tr('Amal')}</span>
-                <select className="input" value={action} onChange={(event) => changeField(setAction, event.target.value)}>
-                  <option value="change">{tr('Vaqt yoki sanani o‘zgartirish')}</option>
-                  <option value="cancel">{tr('Darsni bekor qilish')}</option>
-                </select>
+                <Select
+                  value={action}
+                  onChange={(event) => changeField(setAction, event.target.value)}
+                  options={[
+                    { value: 'change', label: tr('Vaqt yoki sanani o‘zgartirish') },
+                    { value: 'cancel', label: tr('Darsni bekor qilish') },
+                  ]}
+                />
               </label>
               {action === 'change' ? (
                 <>
@@ -284,17 +290,25 @@ export default function ScheduleChangeDialog({ group, initialSlotId = '', onClos
               <label><span>{tr('O‘zgarish kuchga kiradigan sana')}</span><input className="input" type="date" min={today}
                 value={validFrom} onChange={(event) => { changeField(setValidFrom, event.target.value); setSlotId('') }} /></label>
               <label><span>{tr('Jadvaldagi dars')}</span>
-                <select className="input" value={slotId} onChange={(event) => changeField(setSlotId, event.target.value)}>
-                  <option value="">{tr('Darsni tanlang')}</option>
-                  {schedule.map((slot, index) => {
-                    const id = String(slot.slotId || `slot-${index}`)
-                    return <option key={id} value={id}>{WEEKDAYS[Number(slot.day) - 1]} · {slot.startTime}–{slot.endTime}</option>
-                  })}
-                </select>
+                <Select
+                  value={slotId}
+                  onChange={(event) => changeField(setSlotId, event.target.value)}
+                  options={[
+                    { value: '', label: tr('Darsni tanlang') },
+                    ...schedule.map((slot, index) => ({
+                      value: String(slot.slotId || `slot-${index}`),
+                      label: `${tr(WEEKDAYS[Number(slot.day) - 1] || '')} · ${slot.startTime}–${slot.endTime}`,
+                    })),
+                  ]}
+                />
               </label>
-              <label><span>{tr('Hafta kuni')}</span><select className="input" value={day} onChange={(event) => changeField(setDay, Number(event.target.value))}>
-                {WEEKDAYS.map((name, index) => <option key={name} value={index + 1}>{name}</option>)}
-              </select></label>
+              <label><span>{tr('Hafta kuni')}</span>
+                <Select
+                  value={day}
+                  onChange={(event) => changeField(setDay, Number(event.target.value))}
+                  options={WEEKDAYS.map((name, index) => ({ value: index + 1, label: tr(name) }))}
+                />
+              </label>
               <label><span>{tr('Boshlanish vaqti')}</span><input className="input" type="time" value={startTime}
                 onChange={(event) => changeField(setStartTime, event.target.value)} /></label>
               <label><span>{tr('Tugash vaqti')}</span><input className="input" type="time" value={endTime}

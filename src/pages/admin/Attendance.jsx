@@ -39,15 +39,15 @@ export default function AdminAttendance() {
   return (
     <>
       <PageHeader title={t('admin.attendance.title')} />
-      <div className="flex flex-wrap items-end gap-3">
-        <div className="field" style={{ flex: '1 1 200px', maxWidth: 260 }}>
+      <div className="page-toolbar">
+        <div className="field page-toolbar-field">
           <label htmlFor="attendance-date">{t('common.date')}</label>
           <input id="attendance-date" type="date" className="input" value={date} max={todayISO()} onChange={(e) => setDate(e.target.value || todayISO())} />
         </div>
-        <button type="button" className="btn btn-outline btn-sm" onClick={finalize} disabled={finalizing}>
+        <button type="button" className="btn btn-outline page-toolbar-btn" onClick={finalize} disabled={finalizing}>
           {faceLabels.finalize()}
         </button>
-        {finalizeMessage ? <span className="text-sm" aria-live="polite">{finalizeMessage}</span> : null}
+        {finalizeMessage ? <span className="page-toolbar-note" aria-live="polite">{finalizeMessage}</span> : null}
       </div>
       <div className="card">
         <div className="table-wrap">

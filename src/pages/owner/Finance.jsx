@@ -1,5 +1,5 @@
 import { Hourglass, Wallet } from 'lucide-react'
-import { FinancePieChart, RevenueTrendChart } from '../../components/charts/DashboardCharts'
+import { FinancePieChart, RevenueTrendChart } from '../../lib/lazyCharts'
 import { PageEnter } from '../../components/motion/PageMotion'
 import { StatCard } from '../../components/ui'
 import { getFinanceBreakdown, getLast6MonthsTrend, getTrendDelta, getTrendSparkline } from '../../lib/analytics'

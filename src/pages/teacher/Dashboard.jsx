@@ -1,5 +1,5 @@
 import { BookOpen, CalendarDays, ClipboardCheck, Users } from 'lucide-react'
-import { AttendanceBarChart, GroupStudentsChart } from '../../components/charts/DashboardCharts'
+import { AttendanceBarChart, GroupStudentsChart } from '../../lib/lazyCharts'
 import { PageEnter } from '../../components/motion/PageMotion'
 import { TeacherGroupsPanel } from '../../components/teacher/TeacherGroupsPanel'
 import { StatCard, EmptyState } from '../../components/ui'

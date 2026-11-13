@@ -143,6 +143,30 @@ export async function authJson(path, { method = 'GET', body, fallbackError = 'So
   return result
 }
 
+let bootstrapSupported = true
+
+/**
+ * Bir nechta select so‘rovini bitta `/api/bootstrap` chaqiruvida bajaradi (har biri `.all()` kabi).
+ * Worker bu endpointni bilmasa (404) `null` qaytaradi — chaqiruvchi eski usulga o‘tadi.
+ */
+export async function batchSelect(queries, { schedule = false } = {}) {
+  if (!bootstrapSupported) return null
+  try {
+    const result = await authJson('/api/bootstrap', {
+      method: 'POST',
+      body: {
+        queries: Object.fromEntries(Object.entries(queries).map(([key, query]) => [key, query.batchSpec({ all: true })])),
+        schedule,
+      },
+    })
+    return { results: result.data.results, schedule: result.data.schedule }
+  } catch (error) {
+    if (error.status !== 404) throw error
+    bootstrapSupported = false
+    return null
+  }
+}
+
 async function request(path, options = {}, canRefresh = true) {
   const { method = 'POST', body, token, headers = {} } = options
   let response
@@ -238,8 +262,22 @@ class Query {
     return this
   }
 
-  /** Worker sahifalab qaytaradi (max 500); barcha qatorlarni ketma-ket yig‘adi. */
+  /**
+   * Barcha qatorlar: yangi Worker’da bitta `/api/bootstrap` so‘rovi (sahifalar serverda yig‘iladi),
+   * eski Worker’da esa 500 talik sahifalar ketma-ket yig‘iladi.
+   */
   async all(pageSize = 500) {
+    if (bootstrapSupported && readSession()?.access_token) {
+      try {
+        const batch = await batchSelect({ rows: this })
+        if (batch) {
+          const result = batch.results.rows
+          return result.error ? { data: null, error: result.error } : { data: result.data || [], error: null }
+        }
+      } catch (error) {
+        return { data: null, error: { message: error.message, status: error.status } }
+      }
+    }
     const rows = []
     for (let offset = 0; offset < 1_000_000; offset += pageSize) {
       this.body.limit = pageSize
@@ -251,6 +289,11 @@ class Query {
       if (page.length < pageSize) break
     }
     return { data: rows, error: null }
+  }
+
+  /** `/api/bootstrap` uchun so‘rov tavsifi; `all` bo‘lsa sahifalar serverda yig‘iladi. */
+  batchSpec({ all = false } = {}) {
+    return { ...this.body, ...(all ? { all: true } : {}) }
   }
 
   single() {

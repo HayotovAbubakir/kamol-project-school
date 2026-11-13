@@ -1,7 +1,7 @@
 import { Copy, Hourglass, UserRound, UserX, Wallet } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
-import { FinancePieChart, RevenueTrendChart } from '../../components/charts/DashboardCharts'
+import { FinancePieChart, RevenueTrendChart } from '../../lib/lazyCharts'
 import { PageEnter } from '../../components/motion/PageMotion'
 import { EmptyState, StatCard } from '../../components/ui'
 import { useData } from '../../context/DataContext'

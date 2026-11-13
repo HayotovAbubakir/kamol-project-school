@@ -27,17 +27,14 @@ import {
   auth,
   attendance as attendanceData,
   expenses as expenseData,
-  finance,
-  groups as groupData,
   groupManagement,
   homework as homeworkData,
+  loadMiniAppSnapshot,
   payments as paymentData,
-  reports as homeworkReports,
   salaryPayments as salaryPaymentData,
   staff as staffData,
   students as studentData,
   teachers as teacherData,
-  telegram,
 } from '../lib/data/index.js'
 import { Avatar, Button as UiButton, Card as UiCard, ConfirmDialog, EmptyState, Skeleton, Toast } from './ui.jsx'
 import { parseParentPhones } from '../lib/phone.js'
@@ -51,8 +48,6 @@ import {
   fetchHomeworkBotLink,
   fetchHomeworkFileBlob,
   loadHomeworkHistory,
-  loadScheduleNotifications,
-  loadStudentMiniAppOverview,
   listQuestionTickets,
   replyQuestionTicket,
   uploadHomeworkDraftProof,
@@ -374,7 +369,6 @@ export default function MainApp() {
   const [attendanceForm, setAttendanceForm] = useState({ studentId: '', groupId: '', status: 'present', note: '' })
   const [expenseForm, setExpenseForm] = useState({ title: '', amount: '', category: 'Operatsion' })
   const [salaryForm, setSalaryForm] = useState({ teacherId: '', amount: '' })
-  const [inviteLinks, setInviteLinks] = useState({})
   const [feedbacks, setFeedbacks] = useState({})
   const [reviewStatusFilter, setReviewStatusFilter] = useState('all')
   const [reviewStudentFilter, setReviewStudentFilter] = useState('')
@@ -390,7 +384,6 @@ export default function MainApp() {
   const [questionFileKey, setQuestionFileKey] = useState(0)
   const [questionGroupChoice, setQuestionGroupChoice] = useState(null)
   const [questionReply, setQuestionReply] = useState({})
-  const [copied, setCopied] = useState(false)
   const touchStartY = useRef(null)
   const pageHistory = useRef([])
   const wasMoreOpen = useRef(false)
@@ -485,63 +478,45 @@ export default function MainApp() {
     document.querySelector('.mini-app-content')?.scrollTo({ top: 0 })
   }, [moreOpen, page])
 
-  const refresh = useCallback(async (profile) => {
+  const refreshSeq = useRef(0)
+  const refresh = useCallback(async (profile, { background = false } = {}) => {
     if (!profile) return
-    setLoading(true)
-    setError('')
+    // background: amaldan keyingi yangilash — skeleton ko‘rsatilmaydi va tugma kutib qolmaydi.
+    const seq = ++refreshSeq.current
+    if (!background) {
+      setLoading(true)
+      setError('')
+    }
     setRevealedStudentPasswords({})
     Object.values(studentPasswordTimers.current).forEach((timer) => window.clearTimeout(timer))
     studentPasswordTimers.current = {}
     try {
-      let tasks
-      let paymentRows
-      let attendanceRows
-      if (profile.role === 'student') {
-        const overview = await loadStudentMiniAppOverview()
-        tasks = overview.homeworks
-        paymentRows = overview.payments
-        attendanceRows = overview.attendance
-        setStudentGroups(overview.groups || [])
-      } else {
-        tasks = await homeworkData.list(profile)
-        // O‘qituvchida to‘lovlarga ruxsat yo‘q: so‘rov 403 qaytarib, butun yuklashni to‘xtatardi.
-        const staffDataRows = await Promise.all([
-          canAccessTable(profile.role, 'payments') ? paymentData.list(profile) : [],
-          attendanceData.list(profile),
-        ])
-        paymentRows = staffDataRows[0]
-        attendanceRows = staffDataRows[1]
+      const { values, error: loadError } = await loadMiniAppSnapshot(profile, tashkentDateRange())
+      if (seq !== refreshSeq.current) return
+      if (values.overview) {
+        setHomeworks(values.overview.homeworks)
+        setPayments(values.overview.payments)
+        setAttendance(values.overview.attendance)
+        setStudentGroups(values.overview.groups || [])
       }
-      setHomeworks(tasks)
-      setPayments(paymentRows)
-      setAttendance(attendanceRows)
-      setScheduleNotifications(await loadScheduleNotifications())
-      if (profile.role === 'teacher' || isStaff(profile.role)) {
-        setGroups(await groupData.list(profile))
-      }
-      if (isStaff(profile.role) || profile.role === 'teacher') {
-        setStudents(await studentData.list(profile))
-      }
-      if (isStaff(profile.role)) {
-        setAbsentRows(await attendanceData.forDate(tashkentDateRange().to))
-        setReports(await homeworkReports.monthlyHomework())
-        setTeachers(await teacherData.list(profile.role))
-      }
-      if (profile.role === 'owner') {
-        const [expenseRows, salaryRows] = await Promise.all([
-          expenseData.list(),
-          salaryPaymentData.list(),
-        ])
-        setExpenses(expenseRows)
-        setSalaryPayments(salaryRows)
-        setStaffRows(await staffData.list())
-        const { from, to } = tashkentDateRange()
-        setFinanceSummary(await finance.summary(from, to))
-      }
+      if ('homeworks' in values) setHomeworks(values.homeworks)
+      if ('payments' in values) setPayments(values.payments)
+      if ('attendance' in values) setAttendance(values.attendance)
+      if ('scheduleNotifications' in values) setScheduleNotifications(values.scheduleNotifications)
+      if ('groups' in values) setGroups(values.groups)
+      if ('students' in values) setStudents(values.students)
+      if ('absentRows' in values) setAbsentRows(values.absentRows)
+      if ('reports' in values) setReports(values.reports)
+      if ('teachers' in values) setTeachers(values.teachers)
+      if ('expenses' in values) setExpenses(values.expenses)
+      if ('salaryPayments' in values) setSalaryPayments(values.salaryPayments)
+      if ('staffRows' in values) setStaffRows(values.staffRows)
+      if ('financeSummary' in values) setFinanceSummary(values.financeSummary)
+      if (loadError) setError(loadError.message || t('Ma’lumotlarni yuklashda xatolik.'))
     } catch (loadError) {
-      setError(loadError.message || t('Ma’lumotlarni yuklashda xatolik.'))
+      if (seq === refreshSeq.current) setError(loadError.message || t('Ma’lumotlarni yuklashda xatolik.'))
     } finally {
-      setLoading(false)
+      if (seq === refreshSeq.current) setLoading(false)
     }
   }, [])
 
@@ -675,10 +650,10 @@ export default function MainApp() {
     const applyTheme = () => {
       const params = app.themeParams || {}
       const root = document.documentElement
-      root.style.setProperty('--mini-bg', params.bg_color || '#101a2b')
-      root.style.setProperty('--mini-card', params.secondary_bg_color || '#17243a')
-      root.style.setProperty('--mini-text', params.text_color || '#f4f7fb')
-      root.style.setProperty('--mini-muted', params.hint_color || '#a3b2c7')
+      root.style.setProperty('--mini-bg', params.bg_color || '#0c0c0d')
+      root.style.setProperty('--mini-card', params.secondary_bg_color || '#18181b')
+      root.style.setProperty('--mini-text', params.text_color || '#f4f4f5')
+      root.style.setProperty('--mini-muted', params.hint_color || '#a1a1aa')
       root.style.setProperty('--mini-accent', params.button_color || '#4b9cf5')
       root.style.setProperty('--mini-accent-text', params.button_text_color || '#ffffff')
       root.style.colorScheme = app.colorScheme || 'dark'
@@ -773,7 +748,7 @@ export default function MainApp() {
   useEffect(() => {
     if (!user) return undefined
     const onVisible = () => {
-      if (document.visibilityState === 'visible') refresh(user)
+      if (document.visibilityState === 'visible') refresh(user, { background: true })
     }
     document.addEventListener('visibilitychange', onVisible)
     return () => document.removeEventListener('visibilitychange', onVisible)
@@ -823,9 +798,7 @@ export default function MainApp() {
   async function copyText(value) {
     try {
       await navigator.clipboard.writeText(value)
-      setCopied(value)
       setNotice(t('Nusxalandi.'))
-      window.setTimeout(() => setCopied((current) => (current === value ? false : current)), 2000)
     } catch {
       setError(t('Nusxa olish uchun brauzer ruxsatini tekshiring.'))
     }
@@ -839,7 +812,7 @@ export default function MainApp() {
       await homeworkData.create(user, createForm)
       setCreateForm({ groupId: '', title: '', description: '', deadline: '', file: null })
       setNotice(t('Uy vazifasi guruhga yuborildi.'))
-      await refresh(user)
+      refresh(user, { background: true })
     } catch (saveError) {
       setError(saveError.message || t('Vazifani saqlab bo‘lmadi.'))
     } finally {
@@ -877,7 +850,7 @@ export default function MainApp() {
     } finally {
       setBusy(false)
       // Qisman muvaffaqiyatda ham holat yangilansin: qoralama endi serverda bor.
-      if (draftSaved) await refresh(user)
+      if (draftSaved) refresh(user, { background: true })
     }
   }
 
@@ -941,7 +914,7 @@ export default function MainApp() {
     try {
       await homeworkData.review(submission.id, status, feedbacks[submission.id] || '', user.id)
       setNotice(status === 'approved' ? t('Topshiriq qabul qilindi.') : t('Topshiriq qaytarildi.'))
-      await refresh(user)
+      refresh(user, { background: true })
     } catch (reviewError) {
       setError(reviewError.message || t('Bahoni saqlab bo‘lmadi.'))
     } finally {
@@ -955,7 +928,7 @@ export default function MainApp() {
     try {
       await declareHomeworkResult(submissionId, result)
       setNotice(result === 'done' ? t('“Bajardim” belgisi saqlandi.') : t('“Bajarolmadim” belgisi saqlandi.'))
-      await refresh(user)
+      refresh(user, { background: true })
     } catch (declarationError) {
       setError(declarationError.message || t('Natijani saqlab bo‘lmadi.'))
     } finally {
@@ -1062,7 +1035,7 @@ export default function MainApp() {
         setFaceCaptureKey((value) => value + 1)
       }
       setStudentForm({ name: '', phone: '', fatherPhone: '', motherPhone: '', groupId: '', username: '', password: '', autoUsername: true })
-      await refresh(user)
+      refresh(user, { background: true })
     } catch (createError) {
       setError(createError.message || t('O‘quvchini yaratib bo‘lmadi.'))
     } finally {
@@ -1095,34 +1068,12 @@ export default function MainApp() {
       await studentData.changePassword(studentPasswordForm.studentId, studentPasswordForm.password, studentPasswordForm.username)
       setStudentPasswordForm({ studentId: '', username: '', password: '' })
       setNotice(t('O‘quvchi login va paroli yangilandi.'))
-      await refresh(user)
+      refresh(user, { background: true })
     } catch (passwordError) {
       setError(passwordError.message || t('Parolni o‘zgartirib bo‘lmadi.'))
     } finally {
       setBusy(false)
     }
-  }
-
-  async function unlinkStudent(item) {
-    setBusy(true)
-    setError('')
-    try {
-      await studentData.unlinkTelegram(item.id)
-      setNotice(t('Telegram akkaunti uzildi.'))
-      await refresh(user)
-    } catch (unlinkError) {
-      setError(unlinkError.message || t('Telegram akkauntini uzib bo‘lmadi.'))
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  function confirmUnlinkStudent(item) {
-    setConfirmDialog({
-      title: t('Telegram akkauntini uzish'),
-      description: t('{name} o‘quvchisining Telegram akkauntini uzmoqchimisiz?', { name: item.name }),
-      onConfirm: () => unlinkStudent(item),
-    })
   }
 
   async function saveTeacher(event) {
@@ -1169,7 +1120,7 @@ export default function MainApp() {
       }
       setTeacherForm({ name: '', phone: '', monthlySalary: '', username: '', password: '', autoUsername: true })
       setStaffRows(await staffData.list())
-      await refresh(user)
+      refresh(user, { background: true })
       setNotice(editingTeacherId ? t('O‘qituvchi ma’lumotlari yangilandi.') : t('O‘qituvchi akkaunti yaratildi.'))
     } catch (createError) {
       setError(createError.message || t('O‘qituvchini qo‘shib bo‘lmadi.'))
@@ -1259,7 +1210,7 @@ export default function MainApp() {
         setNotice(t('Guruh yaratildi.'))
       }
       setGroupForm({ name: '', teacherId: '', monthlyFee: '', schedule: [{ day: '1', startTime: '', endTime: '' }], scheduleReason: '' })
-      await refresh(user)
+      refresh(user, { background: true })
     } catch (createError) {
       setError(createError.message || t('Guruhni yaratib bo‘lmadi.'))
     } finally {
@@ -1334,7 +1285,7 @@ export default function MainApp() {
       await teacherData.remove(item.id)
       if (editingTeacherId === item.id) setEditingTeacherId(null)
       setNotice(t('O‘qituvchi o‘chirildi.'))
-      await refresh(user)
+      refresh(user, { background: true })
     } catch (removeError) {
       setError(removeError.message || t('O‘qituvchini o‘chirib bo‘lmadi.'))
     } finally {
@@ -1357,7 +1308,7 @@ export default function MainApp() {
       await groupManagement.remove(item.id)
       if (editingGroupId === item.id) setEditingGroupId(null)
       setNotice(t('Guruh o‘chirildi.'))
-      await refresh(user)
+      refresh(user, { background: true })
     } catch (removeError) {
       setError(removeError.message || t('Guruhni o‘chirib bo‘lmadi.'))
     } finally {
@@ -1390,7 +1341,7 @@ export default function MainApp() {
       })
       setPaymentForm((current) => ({ ...current, studentId: '', amount: '' }))
       setNotice(t('To‘lov saqlandi: {name}, {amount}', { name: student?.name || '', amount: money(paymentForm.amount) }))
-      await refresh(user)
+      refresh(user, { background: true })
     } catch (saveError) {
       setError(saveError.message || t('To‘lovni saqlab bo‘lmadi.'))
     } finally {
@@ -1414,7 +1365,7 @@ export default function MainApp() {
     try {
       await paymentData.void(payment.id, reason.trim())
       setNotice(t('To‘lov bekor qilindi.'))
-      await refresh(user)
+      refresh(user, { background: true })
       return true
     } catch (voidError) {
       setError(voidError.message || t('To‘lovni bekor qilib bo‘lmadi.'))
@@ -1430,7 +1381,7 @@ export default function MainApp() {
     try {
       await paymentData.correct(payment.id, patch)
       setNotice(t('To‘lov tuzatildi.'))
-      await refresh(user)
+      refresh(user, { background: true })
       return true
     } catch (correctError) {
       setError(correctError.message || t('To‘lovni tuzatib bo‘lmadi.'))
@@ -1455,7 +1406,7 @@ export default function MainApp() {
         setStudentForm({ name: '', phone: '', fatherPhone: '', motherPhone: '', groupId: '', username: '', password: '', autoUsername: true })
       }
       setNotice(t('O‘quvchi o‘chirildi.'))
-      await refresh(user)
+      refresh(user, { background: true })
     } catch (removeError) {
       setError(removeError.message || t('O‘quvchini o‘chirib bo‘lmadi.'))
     } finally {
@@ -1487,7 +1438,7 @@ export default function MainApp() {
       // Guruh tanlovi qoladi — keyingi o‘quvchini tez belgilash uchun.
       setAttendanceForm((current) => ({ ...current, studentId: '', status: 'present', note: '' }))
       setNotice(t('Davomat saqlandi.'))
-      await refresh(user)
+      refresh(user, { background: true })
     } catch (saveError) {
       if (!overrideFace && isFaceLockedError(saveError)) {
         setConfirmDialog({
@@ -1509,7 +1460,7 @@ export default function MainApp() {
       await expenseData.create({ ...expenseForm, recordedBy: user.id })
       setExpenseForm({ title: '', amount: '', category: 'Operatsion' })
       setNotice(t('Xarajat qayd etildi.'))
-      await refresh(user)
+      refresh(user, { background: true })
     } catch (saveError) {
       setError(saveError.message || t('Xarajatni qayd etib bo‘lmadi.'))
     } finally {
@@ -1527,7 +1478,7 @@ export default function MainApp() {
         try {
           await expenseData.remove(item.id)
           setNotice(t('Xarajat o‘chirildi.'))
-          await refresh(user)
+          refresh(user, { background: true })
         } catch (removeError) {
           setError(removeError.message || t('Xarajatni o‘chirib bo‘lmadi.'))
         } finally {
@@ -1548,29 +1499,9 @@ export default function MainApp() {
       })
       setSalaryForm({ ...salaryForm, amount: '' })
       setNotice(t('O‘qituvchi to‘lovi qayd etildi.'))
-      await refresh(user)
+      refresh(user, { background: true })
     } catch (saveError) {
       setError(saveError.message || t('Ish haqini qayd etib bo‘lmadi.'))
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  async function createInvite(target) {
-    const inviteTarget = typeof target === 'string' ? { profileId: target } : target
-    if (!inviteTarget || (!inviteTarget.profileId && !inviteTarget.studentId)) {
-      setError(t('Foydalanuvchi tanlanmagan.'))
-      return
-    }
-    setBusy(true)
-    setError('')
-    try {
-      const invite = await telegram.createInvite(inviteTarget.profileId || { studentId: inviteTarget.studentId })
-      const key = inviteTarget.profileId || inviteTarget.studentId
-      setInviteLinks((current) => ({ ...current, [key]: invite.invite_url }))
-      setNotice(t('Telegram ulash havolasi 15 daqiqa davomida amal qiladi.'))
-    } catch (inviteError) {
-      setError(inviteError.message || t('Ulash havolasini yaratib bo‘lmadi.'))
     } finally {
       setBusy(false)
     }
@@ -2461,17 +2392,12 @@ export default function MainApp() {
                             {revealedStudentPasswords[item.id] && <> · {t('Parol')}: <strong>{revealedStudentPasswords[item.id]}</strong></>}
                           </p>
                         </div>
-                        <span className={`mini-badge shrink-0 ${item.telegram_id ? 'mini-badge-success' : 'mini-badge-muted'}`}>{item.telegram_id ? t('Telegram ulangan') : t('Telegram ulanmagan')}</span>
                       </div>
                       <div className="mt-2 flex flex-wrap gap-1">
                         <ActionButton className="mini-secondary min-h-9 px-3 text-xs" disabled={busy} onClick={() => editStudent(item)}>{t('Tahrirlash')}</ActionButton>
                         {canAccessTable(role, 'payments') && <ActionButton className="mini-secondary min-h-9 px-3 text-xs" onClick={() => openStudentPayments(item)}>{t('To‘lovlar')}</ActionButton>}
                         <ActionButton className="mini-secondary min-h-9 px-3 text-xs" disabled={busy} onClick={() => revealStudentPassword(item)}>{t('Parolni ko‘rsatish')}</ActionButton>
                         <ActionButton className="mini-secondary min-h-9 px-3 text-xs" disabled={busy} onClick={() => setStudentPasswordForm({ studentId: item.id, username: item.login || '', password: '' })}>{t('Parolni o‘zgartirish')}</ActionButton>
-                        {item.telegram_id
-                          ? <ActionButton className="mini-secondary min-h-9 px-3 text-xs" disabled={busy} onClick={() => confirmUnlinkStudent(item)}>{t('Telegramdan uzish')}</ActionButton>
-                          : <ActionButton className="mini-secondary min-h-9 px-3 text-xs" disabled={busy} onClick={() => createInvite({ studentId: item.id })}>{t('Ulash')}</ActionButton>}
-                        {inviteLinks[item.id] && <ActionButton className="mini-secondary min-h-9 px-3 text-xs" onClick={() => copyText(inviteLinks[item.id])}>{copied === inviteLinks[item.id] ? t('Nusxalandi ✓') : t('Havolani nusxalash')}</ActionButton>}
                         <ActionButton className="mini-secondary min-h-9 px-3 text-xs" aria-expanded={faceStudentId === item.id} onClick={() => setFaceStudentId((current) => (current === item.id ? null : item.id))}>{faceLabels.addOrUpdate()}</ActionButton>
                         <ActionButton className="mini-danger min-h-9 px-3 text-xs" disabled={busy} onClick={() => confirmRemoveStudent(item)}>{t('O‘chirish')}</ActionButton>
                       </div>
@@ -2571,9 +2497,6 @@ export default function MainApp() {
                     <div className="min-w-0"><p className="truncate text-sm font-semibold">{item.name}</p><p className="text-xs text-[var(--mini-muted)]">{item.phone || '—'}</p></div>
                     {canAccessEndpoint(role, 'staff:manage') && (
                       <div className="flex flex-wrap items-center gap-1">
-                        {item.telegram_id
-                          ? <span className="mini-badge mini-badge-success">{t('Telegram ulangan')}</span>
-                          : item.profile_id && <ActionButton className="mini-secondary min-h-9 px-3 text-xs" disabled={busy} onClick={() => createInvite({ profileId: item.profile_id })}>{t('Ulash')}</ActionButton>}
                         <ActionButton className="mini-secondary min-h-9 px-3 text-xs" disabled={busy} onClick={() => editTeacher(item)}>{t('Tahrirlash')}</ActionButton>
                         <ActionButton className="mini-danger min-h-9 px-3 text-xs" disabled={busy} onClick={() => confirmRemoveTeacher(item)}>{t('O‘chirish')}</ActionButton>
                       </div>
@@ -2667,7 +2590,7 @@ export default function MainApp() {
           group={scheduleChangeGroup}
           role={role}
           onClose={() => setScheduleChangeGroup(null)}
-          onSaved={() => refresh(user)}
+          onSaved={() => refresh(user, { background: true })}
         />
       )}
       <ConfirmDialog

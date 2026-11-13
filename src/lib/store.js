@@ -86,10 +86,35 @@ export function validateGroupSchedule(groups, group, excludeId = null, options =
   return null
 }
 
+// To‘lovlar massivi o‘zgarmas (React holati) — har massiv uchun bir marta indekslanadi:
+// qarzdorlar ro‘yxati endi O(o‘quvchi × to‘lov) emas, O(o‘quvchi + to‘lov).
+const paidIndexCache = new WeakMap()
+
+function paidKey(studentId, month, year) {
+  return `${typeof studentId}:${studentId}|${month}|${year}`
+}
+
+function paidIndex(payments) {
+  let index = paidIndexCache.get(payments)
+  if (!index) {
+    index = new Map()
+    for (const p of payments) {
+      const month = Number(p.month)
+      const year = Number(p.year)
+      if (p.voidedAt || Number.isNaN(month) || Number.isNaN(year)) continue
+      const key = paidKey(p.studentId, month, year)
+      index.set(key, (index.get(key) || 0) + (Number(p.amount) || 0))
+    }
+    paidIndexCache.set(payments, index)
+  }
+  return index
+}
+
 export function amountPaidForMonth(payments, studentId, month, year) {
-  return payments
-    .filter((p) => p.studentId === studentId && !p.voidedAt && Number(p.month) === Number(month) && Number(p.year) === Number(year))
-    .reduce((sum, p) => sum + (Number(p.amount) || 0), 0)
+  const m = Number(month)
+  const y = Number(year)
+  if (Number.isNaN(m) || Number.isNaN(y)) return 0
+  return paidIndex(payments).get(paidKey(studentId, m, y)) || 0
 }
 
 /** Guruh narxi: oy berilsa — o‘sha oydagi narx (narx tarixi bo‘yicha), aks holda hozirgi narx. */

@@ -15,13 +15,16 @@ import {
   updateTeacher,
 } from '../api.js'
 import { authJson, cloudflare, isBackendConfigured } from '../cloudflare.js'
-import { canAccessTable } from '../../../shared/role-permissions.js'
+import { canAccessPage, canAccessTable } from '../../../shared/role-permissions.js'
+import { notifyDataChanged } from '../dataEvents.js'
 import {
   createHomework,
   fetchProfile,
   loadGroups,
   loadHomeworks,
   loadMonthlyReport,
+  loadScheduleNotifications,
+  loadStudentMiniAppOverview,
   loadStudents,
   reviewSubmission,
   submitHomework,
@@ -67,29 +70,37 @@ export const students = {
     return typeof result === 'string' ? result : result?.password || ''
   },
   changePassword: (id, password, username) => workerFunction(`students/${encodeURIComponent(id)}/password`, { password, username }),
-  unlinkTelegram: (id) => workerFunction(`students/${encodeURIComponent(id)}/telegram/unlink`, {}),
 }
 
 export const staff = {
   async list() {
     return workerRequest('/api/staff', { method: 'GET' })
   },
-  create: (record) => workerFunction('staff', record),
-  update: (id, updates) => workerFunction(`staff/${encodeURIComponent(id)}`, updates),
+  async create(record) {
+    const result = await workerFunction('staff', record)
+    notifyDataChanged(['teachers', 'users'])
+    return result
+  },
+  async update(id, updates) {
+    const result = await workerFunction(`staff/${encodeURIComponent(id)}`, updates)
+    notifyDataChanged(['teachers', 'users'])
+    return result
+  },
 }
 export const teachers = {
   async list(role = 'owner') {
-    const { data, error } = await cloudflare.from('teachers').select('id, name, phone, monthly_salary, created_at').order('name').all()
+    // Qabulxona `profiles` jadvalini o‘qiy olmaydi; Telegram ulash ham faqat egasiga ochiq.
+    const [{ data, error }, profiles] = await Promise.all([
+      cloudflare.from('teachers').select('id, name, phone, monthly_salary, created_at').order('name').all(),
+      canAccessTable(role, 'profiles')
+        ? cloudflare.from('profiles').select('id, teacher_id, telegram_id').eq('role', 'teacher').all()
+        : { data: [], error: null },
+    ])
     if (error) throw error
     const rows = data || []
     if (!rows.length) return []
-    // Qabulxona `profiles` jadvalini o‘qiy olmaydi; Telegram ulash ham faqat egasiga ochiq.
-    let profileRows = []
-    if (canAccessTable(role, 'profiles')) {
-      const profiles = await cloudflare.from('profiles').select('id, teacher_id, telegram_id').in('teacher_id', rows.map((row) => row.id))
-      if (profiles.error) throw profiles.error
-      profileRows = profiles.data || []
-    }
+    if (profiles.error) throw profiles.error
+    const profileRows = (profiles.data || []).filter((profile) => profile.teacher_id)
     const byTeacher = new Map(profileRows.map((profile) => [profile.teacher_id, profile]))
     return rows.map((row) => ({
       ...row,
@@ -178,12 +189,45 @@ export const finance = {
 export const reports = { monthlyHomework: loadMonthlyReport }
 export const groupManagement = { create: addGroup, update: updateGroup, remove: deleteGroup }
 
-export const telegram = {
-  createInvite(target) {
-    return authJson('/api/telegram/invites', {
-      method: 'POST',
-      body: typeof target === 'string' ? { profileId: target } : target,
-      fallbackError: 'Telegram ulash havolasini yaratib bo‘lmadi.',
-    })
-  },
+/**
+ * Mini App’ning barcha ma’lumotlari parallel yuklanadi (avval ~18 ta ketma-ket so‘rov edi).
+ * Bitta qism xato bersa ham qolganlari ko‘rsatiladi; birinchi xato `error` da qaytadi.
+ */
+export async function loadMiniAppSnapshot(profile, { from, to }) {
+  const role = profile.role
+  const staffRole = canAccessPage(role, 'students') && canAccessPage(role, 'groups')
+  const tasks = {}
+  if (role === 'student') {
+    tasks.overview = loadStudentMiniAppOverview()
+  } else {
+    tasks.homeworks = loadHomeworks(profile)
+    // O‘qituvchida to‘lovlarga ruxsat yo‘q: so‘rov 403 qaytarib, butun yuklashni to‘xtatardi.
+    tasks.payments = canAccessTable(role, 'payments') ? payments.list(profile) : Promise.resolve([])
+    tasks.attendance = attendance.list(profile)
+  }
+  tasks.scheduleNotifications = loadScheduleNotifications()
+  if (role === 'teacher' || staffRole) {
+    tasks.groups = loadGroups(profile)
+    tasks.students = loadStudents(profile)
+  }
+  if (staffRole) {
+    tasks.absentRows = attendance.forDate(to)
+    tasks.reports = loadMonthlyReport()
+    tasks.teachers = teachers.list(role)
+  }
+  if (role === 'owner') {
+    tasks.expenses = expenses.list()
+    tasks.salaryPayments = salaryPayments.list()
+    tasks.staffRows = staff.list()
+    tasks.financeSummary = finance.summary(from, to)
+  }
+  const keys = Object.keys(tasks)
+  const settled = await Promise.allSettled(keys.map((key) => tasks[key]))
+  const values = {}
+  let error = null
+  settled.forEach((result, index) => {
+    if (result.status === 'fulfilled') values[keys[index]] = result.value
+    else error ||= result.reason
+  })
+  return { values, error }
 }

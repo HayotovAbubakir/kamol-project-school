@@ -140,6 +140,7 @@ async function installMocks(page, role, scheme = 'light', { signedIn = true, sch
       })
     }
     if (pathname === '/api/auth/logout') return json({ ok: true })
+    if (pathname === '/api/bootstrap') return json({ error: 'Not found' }, 404)
     if (pathname === '/api/schedule/state') {
       return json({ data: { groups: [{
         group_id: group.id,
@@ -205,12 +206,6 @@ async function installMocks(page, role, scheme = 'light', { signedIn = true, sch
     if (pathname === '/api/notifications') {
       return json({ data: (scheduleScenario?.notifications || []).filter((item) => item.recipient === role) })
     }
-    if (pathname === `/api/students/${student.id}/telegram/unlink`) {
-      records.profiles[0].telegram_id = null
-      student.telegram_id = null
-      return json({ data: { ok: true } })
-    }
-
     if (pathname === '/api/db') {
       const body = request.postDataJSON()
       if (body.table === 'homework' && body.action === 'insert') {
@@ -481,7 +476,8 @@ test.describe('Mini App role flows', () => {
     const form = page.locator('#reception-form')
     await form.locator('input').nth(0).fill('Dilnoza Rahimova')
     await form.locator('input').nth(1).fill('+998901112255')
-    await form.locator('select').selectOption('reception')
+    await form.getByRole('button', { name: 'Rol' }).click()
+    await page.getByRole('option', { name: 'Qabulxona' }).click()
     await form.locator('input').nth(2).fill('dilnoza.rahimova')
     await form.locator('input[type="password"]').fill('DilnozaStrong2026')
     await page.getByRole('button', { name: 'Saqlash' }).click()
@@ -499,21 +495,12 @@ test.describe('Mini App role flows', () => {
     expect(await page.locator('.sidebar.sidebar-open').evaluate((sidebar) => Number(getComputedStyle(sidebar).zIndex))).toBeGreaterThan(400)
   })
 
-  test('reception confirms before unlinking a student Telegram account', async ({ page }) => {
+  test('student management shows login/password controls and no Telegram invite UI', async ({ page }) => {
     await openMiniApp(page, 'reception')
     await page.getByRole('navigation', { name: 'Asosiy menyu' }).getByRole('button', { name: 'O‘quvchilar', exact: true }).click()
-    await page.getByRole('button', { name: 'Telegramdan uzish' }).click()
-
-    const dialog = page.getByRole('dialog', { name: 'Telegram akkauntini uzish' })
-    await expect(dialog).toBeVisible()
-    await dialog.getByRole('button', { name: 'Bekor qilish' }).click()
-    await expect(dialog).toBeHidden()
-    await expect(page.getByRole('button', { name: 'Telegramdan uzish' })).toBeVisible()
-
-    await page.getByRole('button', { name: 'Telegramdan uzish' }).click()
-    await page.getByRole('dialog', { name: 'Telegram akkauntini uzish' }).getByRole('button', { name: 'Tasdiqlash' }).click()
-    await expect(page.getByText('Telegram akkaunti uzildi.')).toBeVisible()
-    await expect(page.getByRole('button', { name: 'Telegramdan uzish' })).toHaveCount(0)
+    await expect(page.getByRole('button', { name: 'Parolni ko‘rsatish' }).first()).toBeVisible()
+    await expect(page.getByText(/Telegram ulan|Telegramdan uzish|Havolani nusxalash/)).toHaveCount(0)
+    await expect(page.getByRole('button', { name: 'Ulash', exact: true })).toHaveCount(0)
   })
 
   test('reception reschedules tomorrow and teacher/student see the changed lesson and notification', async ({ page, browser }) => {

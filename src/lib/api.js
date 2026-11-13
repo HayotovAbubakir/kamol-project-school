@@ -1,4 +1,4 @@
-import { cloudflare, usernameToEmail, usernameToEmailCandidates, normalizeUsername, MIN_PASSWORD_LENGTH } from './cloudflare'
+import { authJson, batchSelect, cloudflare, usernameToEmail, usernameToEmailCandidates, normalizeUsername, MIN_PASSWORD_LENGTH } from './cloudflare'
 import { currentMonthYear, todayISO, toStoredExpenseCategory } from './utils'
 import { primaryGroupTeacherId, studentMonthlyFee, validateGroupSchedule } from './store'
 import { translate } from '../i18n/runtime'
@@ -12,21 +12,13 @@ function requireClient() {
   return cloudflare
 }
 
+// Token mahalliy sessiyadan olinadi; 401 bo‘lsa authFetch bir marta yangilaydi (alohida /auth/me so‘rovi kerak emas).
 async function workerApiRequest(path, body = undefined) {
-  const db = requireClient()
-  const { data: sessionData } = await db.auth.getSession()
-  const token = sessionData.session?.access_token
-  if (!token) throw new Error('Sessiya tugagan. Ilovani qayta ochib kiring.')
-  const response = await fetch(path, {
+  const result = await authJson(path, {
     method: body === undefined ? 'GET' : 'POST',
-    headers: {
-      Authorization: `Bearer ${token}`,
-      ...(body === undefined ? {} : { 'Content-Type': 'application/json' }),
-    },
-    body: body === undefined ? undefined : JSON.stringify(body),
+    body,
+    fallbackError: 'So‘rovni bajarib bo‘lmadi.',
   })
-  const result = await response.json()
-  if (!response.ok) throw new Error(result.error || 'So‘rovni bajarib bo‘lmadi.')
   return result.data
 }
 
@@ -186,58 +178,58 @@ function mapProfile(row) {
   }
 }
 
-export async function loadAll(role = 'owner') {
-  const db = requireClient()
+/** DataContext bo‘limlari; `groups` va `students` bir-biriga bog‘liq, shuning uchun birga yuklanadi. */
+export const DATA_SCOPES = Object.freeze(['users', 'teachers', 'groups', 'students', 'payments', 'salaryPayments', 'expenses', 'attendance'])
+
+function scopeQueries(db, role, scopes) {
   const isOwner = role === 'owner'
-  const isReception = role === 'reception'
+  const isStaff = isOwner || role === 'reception'
+  const queries = {}
+  if (isOwner && scopes.has('users')) queries.profiles = db.from('profiles').select('*').order('created_at')
+  if (scopes.has('teachers')) queries.teachers = db.from('teachers').select('*').order('created_at')
+  if (scopes.has('groups') || scopes.has('students')) {
+    queries.groups = db.from('groups').select('*').order('created_at')
+    queries.students = db.from('students').select('*').order('created_at')
+    queries.links = db.from('group_students').select('*').order('group_id')
+    if (isStaff) queries.feeHistory = db.from('group_fee_history').select('group_id, monthly_fee, valid_from').order('group_id')
+  }
+  if (isStaff && scopes.has('payments')) queries.payments = db.from('payments').select('*').order('paid_at')
+  if (isOwner && scopes.has('salaryPayments')) queries.salary = db.from('salary_payments').select('*').order('paid_at')
+  if (isOwner && scopes.has('expenses')) queries.expenses = db.from('expenses').select('*').order('date', { ascending: false })
+  if (scopes.has('attendance')) queries.attendance = db.from('attendance').select('*').order('date', { ascending: false })
+  return queries
+}
 
-  const [
-    profilesRes,
-    teachersRes,
-    groupsRes,
-    studentsRes,
-    linksRes,
-    paymentsRes,
-    salaryRes,
-    expensesRes,
-    attendanceRes,
-  ] = await Promise.all([
-    isOwner ? db.from('profiles').select('*').order('created_at').all() : Promise.resolve({ data: [], error: null }),
-    db.from('teachers').select('*').order('created_at').all(),
-    db.from('groups').select('*').order('created_at').all(),
-    db.from('students').select('*').order('created_at').all(),
-    db.from('group_students').select('*').order('group_id').all(),
-    (isOwner || isReception) ? db.from('payments').select('*').order('paid_at').all() : Promise.resolve({ data: [], error: null }),
-    isOwner ? db.from('salary_payments').select('*').order('paid_at').all() : Promise.resolve({ data: [], error: null }),
-    isOwner ? db.from('expenses').select('*').order('date', { ascending: false }).all() : Promise.resolve({ data: [], error: null }),
-    db.from('attendance').select('*').order('date', { ascending: false }).all(),
+/**
+ * Barcha kerakli jadvallar + jadval holati bitta `/api/bootstrap` so‘rovida.
+ * Eski Worker (404) bilan ishlaganda avvalgidek parallel `/api/db` so‘rovlariga qaytadi.
+ */
+async function fetchQueries(queries, withSchedule) {
+  const keys = Object.keys(queries)
+  const batch = await batchSelect(queries, { schedule: withSchedule })
+  if (batch) return batch
+  const [rows, schedule] = await Promise.all([
+    Promise.all(keys.map((key) => queries[key].all())),
+    withSchedule ? workerApiRequest('/api/schedule/state') : null,
   ])
+  return { results: Object.fromEntries(keys.map((key, index) => [key, rows[index]])), schedule }
+}
+
+function buildGroupsAndStudents(results, scheduleState) {
   // Narx tarixi ixtiyoriy: migratsiya hali qo‘llanmagan bazada joriy narx ishlatiladi.
-  const feeHistoryRes = (isOwner || isReception)
-    ? await db.from('group_fee_history').select('group_id, monthly_fee, valid_from').order('group_id').all()
-    : { data: [], error: null }
+  const feeHistoryRes = results.feeHistory || { data: [], error: null }
   const feeHistoryByGroup = groupFeeHistoryByGroup(feeHistoryRes.error ? [] : feeHistoryRes.data || [])
-
-  const firstError = [
-    profilesRes, teachersRes, groupsRes, studentsRes,
-    linksRes, paymentsRes, salaryRes, expensesRes, attendanceRes,
-  ].find((r) => r.error)?.error
-  if (firstError) throw firstError
-
-  const links = linksRes.data || []
   const studentIdsByGroup = {}
   const groupIdsByStudent = {}
-  for (const link of links) {
+  for (const link of results.links.data || []) {
     if (!studentIdsByGroup[link.group_id]) studentIdsByGroup[link.group_id] = []
     studentIdsByGroup[link.group_id].push(link.student_id)
     if (!groupIdsByStudent[link.student_id]) groupIdsByStudent[link.student_id] = []
     groupIdsByStudent[link.student_id].push(link.group_id)
   }
-
-  const scheduleState = await workerApiRequest('/api/schedule/state')
-  const scheduleByGroup = new Map((scheduleState.groups || []).map((state) => [state.group_id, state]))
+  const scheduleByGroup = new Map((scheduleState?.groups || []).map((state) => [state.group_id, state]))
   const today = tashkentTodayValue()
-  const groups = (groupsRes.data || []).map((g) => {
+  const groups = (results.groups.data || []).map((g) => {
     const state = scheduleByGroup.get(g.id)
     const activeVersion = (state?.versions || [])
       .filter((version) => version.valid_from <= today && (!version.valid_to || today < version.valid_to))
@@ -256,23 +248,43 @@ export async function loadAll(role = 'owner') {
       feeHistory: feeHistoryByGroup.get(g.id) || [],
     }
   })
-  const students = (studentsRes.data || []).map((s) => {
+  const students = (results.students.data || []).map((s) => {
     const student = mapStudent(s, groupIdsByStudent[s.id] || [])
     student.monthlyFee = studentMonthlyFee(student, groups)
     return student
   })
+  return { groups, students }
+}
 
-  return {
-    users: (profilesRes.data || []).map(mapProfile),
-    teachers: (teachersRes.data || []).map(mapTeacher),
-    rooms: [],
-    groups,
-    students,
-    payments: (paymentsRes.data || []).map(mapPayment),
-    salaryPayments: (salaryRes.data || []).map(mapSalary),
-    expenses: (expensesRes.data || []).map(mapExpense),
-    attendance: (attendanceRes.data || []).map(mapAttendance),
+/** Faqat so‘ralgan bo‘limlarni yuklaydi (masalan to‘lovdan keyin faqat `payments`). */
+export async function loadTables(role = 'owner', scopeList = DATA_SCOPES) {
+  const db = requireClient()
+  const scopes = new Set(scopeList)
+  const queries = scopeQueries(db, role, scopes)
+  const needsGroups = Boolean(queries.groups)
+  const { results, schedule } = await fetchQueries(queries, needsGroups)
+
+  const firstError = Object.entries(results).find(([key, result]) => key !== 'feeHistory' && result.error)?.[1].error
+  if (firstError) {
+    const error = new Error(firstError.message || translate('domain.error.dataLoadFailed'))
+    if (firstError.status) error.status = firstError.status
+    throw error
   }
+
+  const rows = (key) => results[key]?.data || []
+  const next = {}
+  if (scopes.has('users')) next.users = rows('profiles').map(mapProfile)
+  if (scopes.has('teachers')) next.teachers = rows('teachers').map(mapTeacher)
+  if (needsGroups) Object.assign(next, buildGroupsAndStudents(results, schedule))
+  if (scopes.has('payments')) next.payments = rows('payments').map(mapPayment)
+  if (scopes.has('salaryPayments')) next.salaryPayments = rows('salary').map(mapSalary)
+  if (scopes.has('expenses')) next.expenses = rows('expenses').map(mapExpense)
+  if (scopes.has('attendance')) next.attendance = rows('attendance').map(mapAttendance)
+  return next
+}
+
+export async function loadAll(role = 'owner') {
+  return { rooms: [], ...(await loadTables(role, DATA_SCOPES)) }
 }
 
 export async function fetchProfile(userId) {
@@ -607,14 +619,6 @@ export async function changeStudentPassword(id, { password, username }) {
   return data?.data
 }
 
-export async function unlinkStudentTelegram(id) {
-  const { error } = await requireClient().functions.invoke(
-    `students/${encodeURIComponent(id)}/telegram/unlink`,
-    { body: {} },
-  )
-  if (error) throw error
-}
-
 export async function resetUserCredentials(user) {
   const db = requireClient()
   const password = [...crypto.getRandomValues(new Uint8Array(16))]
@@ -671,7 +675,7 @@ export async function addPayment(payload) {
   }
 
   const method = ['cash', 'card', 'transfer'].includes(payload.method) ? payload.method : null
-  const { error } = await db.from('payments').insert({
+  const { data, error } = await db.from('payments').insert({
     student_id: payload.studentId,
     student_name: studentName,
     amount,
@@ -679,21 +683,17 @@ export async function addPayment(payload) {
     year,
     paid_at: payload.paidAt || new Date().toISOString(),
     ...(method ? { method } : {}),
-  })
+  }).select().single()
   if (error) throw error
+  return data ? mapPayment(data) : null
 }
 
 async function paymentRequest(path, options = {}) {
-  const { data } = await requireClient().auth.getSession()
-  const token = data.session?.access_token
-  if (!token) throw new Error(translate('domain.error.dataLoadFailed'))
-  const response = await fetch(path, {
+  const result = await authJson(path, {
     method: options.method || 'GET',
-    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-    body: options.body ? JSON.stringify(options.body) : undefined,
+    body: options.body,
+    fallbackError: translate('domain.error.dataLoadFailed'),
   })
-  const result = await response.json()
-  if (!response.ok) throw new Error(result.error || translate('domain.error.dataLoadFailed'))
   return result.data
 }
 
@@ -732,12 +732,13 @@ export async function addSalaryPayment(payload) {
   const amount = Number(payload.amount)
   if (!payload.teacherId) throw new Error(translate('domain.error.teacherRequired'))
   if (!Number.isFinite(amount) || amount <= 0) throw new Error(translate('domain.error.amountPositive'))
-  const { error } = await db.from('salary_payments').insert({
+  const { data, error } = await db.from('salary_payments').insert({
     teacher_id: payload.teacherId,
     amount,
     paid_at: payload.paidAt || new Date().toISOString(),
-  })
+  }).select().single()
   if (error) throw error
+  return data ? mapSalary(data) : null
 }
 
 export async function addExpense(payload) {
@@ -746,14 +747,15 @@ export async function addExpense(payload) {
   const amount = Number(payload.amount)
   if (!title) throw new Error(translate('domain.error.titleRequired'))
   if (!Number.isFinite(amount) || amount <= 0) throw new Error(translate('domain.error.amountPositive'))
-  const { error } = await db.from('expenses').insert({
+  const { data, error } = await db.from('expenses').insert({
     title,
     amount,
     category: toStoredExpenseCategory(payload.category),
     date: payload.date || todayISO(),
     recorded_by: payload.recordedBy || null,
-  })
+  }).select().single()
   if (error) throw error
+  return data ? mapExpense(data) : null
 }
 
 export async function deleteExpense(id) {
@@ -941,7 +943,7 @@ export async function updateOwnCredentials({ username, password }) {
   }
 
   const userId = authData.user.id
-  const profile = await fetchProfile(userId)
+  const profile = mapProfile(authData.user)
   if (profile.role !== 'owner') {
     throw new Error(translate('domain.error.ownerOnlyCredentials'))
   }

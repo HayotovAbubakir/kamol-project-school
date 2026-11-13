@@ -94,7 +94,7 @@ export default function FacePhotosPanel({ studentId, labels, confirm, onChanged 
                 </figure>
               ))}
             </div>
-          ) : <p className="face-panel-muted">{label('noPhotos')}</p>}
+          ) : null}
           {details?.sync?.some((row) => row.status === 'error') ? (
             <p className="face-capture-error">{details.sync.find((row) => row.status === 'error')?.last_error}</p>
           ) : null}

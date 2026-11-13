@@ -961,25 +961,56 @@ function teacherOwnsGroup(group, teacherId) {
   }
 }
 
-async function ownedGroupIds(env, profile) {
-  const state = await loadScheduleState(env)
-  const today = tashkentToday()
-  return state.groups.filter((group) => {
-    const relevantVersions = state.versions.filter((version) => version.group_id === group.id
-      && (!version.valid_to || version.valid_to > today))
-    if (!relevantVersions.length) return teacherOwnsGroup(group, profile.teacher_id)
-    return relevantVersions.some((version) => normalizedSchedule(parsedSchedule(version.schedule))
-      .some((slot) => (slot.teacherId || group.teacher_id) === profile.teacher_id))
-  }).map((group) => group.id)
+/**
+ * So‘rov ichidagi ruxsat keshi: bir xil guruh/a’zolik/vazifa ma’lumoti har bir qator uchun
+ * qayta o‘qilmasin. Kesh faqat bitta so‘rov davomida yashaydi (yozuvlardan keyin ishlatilmaydi).
+ */
+function cached(cache, key, load) {
+  if (!cache) return load()
+  if (!cache.has(key)) cache.set(key, load())
+  return cache.get(key)
 }
 
-async function membershipGroupIds(env, studentId) {
+async function ownedGroupIds(env, profile, cache = null) {
+  return cached(cache, 'owned-groups', async () => {
+    const state = await loadScheduleState(env)
+    const today = tashkentToday()
+    return state.groups.filter((group) => {
+      const relevantVersions = state.versions.filter((version) => version.group_id === group.id
+        && (!version.valid_to || version.valid_to > today))
+      if (!relevantVersions.length) return teacherOwnsGroup(group, profile.teacher_id)
+      return relevantVersions.some((version) => normalizedSchedule(parsedSchedule(version.schedule))
+        .some((slot) => (slot.teacherId || group.teacher_id) === profile.teacher_id))
+    }).map((group) => group.id)
+  })
+}
+
+async function membershipGroupIds(env, studentId, cache = null) {
   if (!studentId) return []
-  const rows = await env.DB.prepare('SELECT group_id FROM group_students WHERE student_id = ?').bind(studentId).all()
-  return (rows.results || []).map((row) => row.group_id)
+  return cached(cache, `membership:${studentId}`, async () => {
+    const rows = await env.DB.prepare('SELECT group_id FROM group_students WHERE student_id = ?').bind(studentId).all()
+    return (rows.results || []).map((row) => row.group_id)
+  })
 }
 
-async function canRead(env, profile, table, row) {
+/** Ko‘p qatorli o‘qishda a’zoliklarni bitta so‘rov bilan oldindan keshga yuklaydi. */
+async function preloadMemberships(env, studentIds, cache) {
+  const ids = [...new Set(studentIds.filter(Boolean))].filter((id) => !cache.has(`membership:${id}`))
+  if (ids.length < 2) return
+  const { results } = await env.DB.prepare('SELECT student_id, group_id FROM group_students').all()
+  const byStudent = new Map()
+  for (const row of results || []) {
+    if (!byStudent.has(row.student_id)) byStudent.set(row.student_id, [])
+    byStudent.get(row.student_id).push(row.group_id)
+  }
+  for (const id of ids) cache.set(`membership:${id}`, Promise.resolve(byStudent.get(id) || []))
+}
+
+function homeworkById(env, homeworkId, cache) {
+  return cached(cache, `homework:${homeworkId}`, () => env.DB.prepare('SELECT * FROM homework WHERE id = ?').bind(homeworkId).first())
+}
+
+async function canRead(env, profile, table, row, cache = null) {
   if (canAccessEndpoint(profile.role, 'data:staff-wide-read')) return true
   if (table === 'profiles') return row.id === profile.id
   if (table === 'teachers') return row.id === profile.teacher_id
@@ -989,41 +1020,41 @@ async function canRead(env, profile, table, row) {
     if (STAFF.has(profile.role)) return true
     if (profile.role === 'student') return row.student_id === profile.student_id
     if (profile.role === 'teacher') {
-      const homework = await env.DB.prepare('SELECT * FROM homework WHERE id = ?').bind(row.homework_id).first()
-      return Boolean(homework && await canRead(env, profile, 'homework', homework))
+      const homework = await homeworkById(env, row.homework_id, cache)
+      return Boolean(homework && await canRead(env, profile, 'homework', homework, cache))
     }
     return false
   }
   if (table === 'groups') {
-    if (profile.role === 'teacher') return (await ownedGroupIds(env, profile)).includes(row.id)
-    return (await membershipGroupIds(env, profile.student_id)).includes(row.id)
+    if (profile.role === 'teacher') return (await ownedGroupIds(env, profile, cache)).includes(row.id)
+    return (await membershipGroupIds(env, profile.student_id, cache)).includes(row.id)
   }
   if (table === 'students') {
     if (profile.role === 'student') return row.id === profile.student_id
     const [studentGroups, teacherGroups] = await Promise.all([
-      membershipGroupIds(env, row.id),
-      ownedGroupIds(env, profile),
+      membershipGroupIds(env, row.id, cache),
+      ownedGroupIds(env, profile, cache),
     ])
     return studentGroups.some((id) => teacherGroups.includes(id))
   }
   if (table === 'group_students') {
     if (profile.role === 'student') return row.student_id === profile.student_id
-    return (await ownedGroupIds(env, profile)).includes(row.group_id)
+    return (await ownedGroupIds(env, profile, cache)).includes(row.group_id)
   }
   if (table === 'attendance') {
     if (profile.role === 'student') return row.student_id === profile.student_id
-    if (!(await ownedGroupIds(env, profile)).includes(row.group_id)) return false
-    return (await membershipGroupIds(env, row.student_id)).includes(row.group_id)
+    if (!(await ownedGroupIds(env, profile, cache)).includes(row.group_id)) return false
+    return (await membershipGroupIds(env, row.student_id, cache)).includes(row.group_id)
   }
   if (table === 'homework') {
-    if (profile.role === 'student') return (await membershipGroupIds(env, profile.student_id)).includes(row.group_id)
+    if (profile.role === 'student') return (await membershipGroupIds(env, profile.student_id, cache)).includes(row.group_id)
     return row.teacher_id === profile.teacher_id
-      || (await ownedGroupIds(env, profile)).includes(row.group_id)
+      || (await ownedGroupIds(env, profile, cache)).includes(row.group_id)
   }
   if (table === 'homework_submissions') {
     if (profile.role === 'student') return row.student_id === profile.student_id
-    const homework = await env.DB.prepare('SELECT * FROM homework WHERE id = ?').bind(row.homework_id).first()
-    return Boolean(homework && await canRead(env, profile, 'homework', homework))
+    const homework = await homeworkById(env, row.homework_id, cache)
+    return Boolean(homework && await canRead(env, profile, 'homework', homework, cache))
   }
   return false
 }
@@ -1077,7 +1108,7 @@ function queryColumns(table) {
   return COLUMNS[table].filter((column) => !(table === 'profiles' && column === 'is_active'))
 }
 
-async function selectRows(env, profile, body, service) {
+async function selectRows(env, profile, body, service, { cache = new Map(), maxPageSize = 500 } = {}) {
   const { table, filters = [], order, limit, columns = '*' } = body
   const { fields, relation } = parseSelect(columns)
   const allowedColumns = new Set(COLUMNS[table] || [])
@@ -1124,7 +1155,7 @@ async function selectRows(env, profile, body, service) {
     sql += ` ORDER BY "${order.column}" ${order.ascending ? 'ASC' : 'DESC'}`
   }
   const offset = Math.max(0, Math.min(Number(body.offset) || 0, 1000000))
-  const pageSize = Math.max(1, Math.min(Number(limit) || 100, 500))
+  const pageSize = Math.max(1, Math.min(Number(limit) || 100, maxPageSize))
   const databasePagination = service || canAccessEndpoint(profile?.role, 'data:staff-wide-query')
   if (databasePagination) {
     sql += ' LIMIT ? OFFSET ?'
@@ -1147,8 +1178,12 @@ async function selectRows(env, profile, body, service) {
     }
   }
   if (!service) {
+    if (rows.length > 1 && profile.role === 'teacher') {
+      if (table === 'students') await preloadMemberships(env, rows.map((row) => row.id), cache)
+      if (table === 'attendance') await preloadMemberships(env, rows.map((row) => row.student_id), cache)
+    }
     const allowed = []
-    for (const row of rows) if (await canRead(env, profile, table, row)) allowed.push(row)
+    for (const row of rows) if (await canRead(env, profile, table, row, cache)) allowed.push(row)
     rows = allowed
   }
   if (!databasePagination) rows = rows.slice(offset, offset + pageSize)
@@ -2159,44 +2194,111 @@ async function handleDatabase(request, env, profile, service) {
   const parsed = DatabaseSchema.safeParse(payload)
   if (!parsed.success) return fail('Invalid database request.')
   const body = parsed.data
-  if (!TABLES.has(body.table)) return fail('Unknown table.')
-  if (profile?.password_reset_required && profile.auth_method !== 'telegram') {
-    return fail('Davom etish uchun parolni yangilang.', 403)
-  }
-  if (body.table === 'staff_codes' && !service && !canAccessEndpoint(profile?.role, 'data:staff-wide-read')) return fail('Access denied.', 403)
-  if (body.table === 'telegram_links' && !service && !canAccessEndpoint(profile?.role, 'data:staff-wide-read')) return fail('Access denied.', 403)
-  if (!service && !profile) return fail('Login required.', 401)
-  const action = body.action || 'select'
-  if (!service && !canAccessTable(profile, body.table, action)) return fail('Access denied.', 403)
-  if (body.table === 'payments' && action === 'delete') {
-    return fail('To‘lovni o‘chirish mumkin emas. Bekor qilish uchun maxsus amalni ishlating.', 405)
-  }
-  if (body.table === 'students' && action !== 'select') {
-    return fail('Use the explicit student account endpoint.', 405)
-  }
-  if (body.table === 'groups' && action === 'update' && body.values
-    && (Object.hasOwn(body.values, 'schedule') || Object.hasOwn(body.values, 'teacher_id'))) {
-    return fail('Jadval yoki o‘qituvchini jadval o‘zgarishi orqali yangilang.', 405)
-  }
+  const denied = databaseAccessError(profile, service, body)
+  if (denied) return fail(denied.message, denied.status)
   try {
     if (!body.action || body.action === 'select') {
-      const rows = await selectRows(env, profile, body, service)
-      if (['homework', 'homework_submissions'].includes(body.table)) {
-        const origin = new URL(request.url).origin
-        await Promise.all(rows.map(async (row) => {
-          if (row?.file_url) row.file_url = await refreshFileUrl(env, origin, row.file_url)
-        }))
-      }
-      const data = body.maybeSingle ? rows[0] ?? null : rows
+      const data = await selectForResponse(request, env, profile, service, body)
       return json({ data, error: null })
     }
     const data = await mutateRows(env, profile, body, service)
     return json({ data, error: null })
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error)
-    const status = /access denied/i.test(message) ? 403 : message.startsWith('FACE_ID_LOCKED') ? 409 : 400
+    const { message, status } = databaseErrorStatus(error)
     return json({ data: null, error: { message } }, status)
   }
+}
+
+/** `/api/db` va `/api/bootstrap` uchun bir xil ruxsat tekshiruvi. */
+function databaseAccessError(profile, service, body) {
+  if (!TABLES.has(body.table)) return { message: 'Unknown table.', status: 400 }
+  if (profile?.password_reset_required && profile.auth_method !== 'telegram') {
+    return { message: 'Davom etish uchun parolni yangilang.', status: 403 }
+  }
+  if (body.table === 'staff_codes' && !service && !canAccessEndpoint(profile?.role, 'data:staff-wide-read')) return { message: 'Access denied.', status: 403 }
+  if (body.table === 'telegram_links' && !service && !canAccessEndpoint(profile?.role, 'data:staff-wide-read')) return { message: 'Access denied.', status: 403 }
+  if (!service && !profile) return { message: 'Login required.', status: 401 }
+  const action = body.action || 'select'
+  if (!service && !canAccessTable(profile, body.table, action)) return { message: 'Access denied.', status: 403 }
+  if (body.table === 'payments' && action === 'delete') {
+    return { message: 'To‘lovni o‘chirish mumkin emas. Bekor qilish uchun maxsus amalni ishlating.', status: 405 }
+  }
+  if (body.table === 'students' && action !== 'select') {
+    return { message: 'Use the explicit student account endpoint.', status: 405 }
+  }
+  if (body.table === 'groups' && action === 'update' && body.values
+    && (Object.hasOwn(body.values, 'schedule') || Object.hasOwn(body.values, 'teacher_id'))) {
+    return { message: 'Jadval yoki o‘qituvchini jadval o‘zgarishi orqali yangilang.', status: 405 }
+  }
+  return null
+}
+
+function databaseErrorStatus(error) {
+  const message = error instanceof Error ? error.message : String(error)
+  const status = /access denied/i.test(message) ? 403 : message.startsWith('FACE_ID_LOCKED') ? 409 : 400
+  return { message, status }
+}
+
+async function selectForResponse(request, env, profile, service, body, options) {
+  const rows = await selectRows(env, profile, body, service, options)
+  if (['homework', 'homework_submissions'].includes(body.table)) {
+    const origin = new URL(request.url).origin
+    await Promise.all(rows.map(async (row) => {
+      if (row?.file_url) row.file_url = await refreshFileUrl(env, origin, row.file_url)
+    }))
+  }
+  return body.maybeSingle ? rows[0] ?? null : rows
+}
+
+const BOOTSTRAP_PAGE_SIZE = 10000
+const BootstrapSchema = z.object({
+  queries: z.record(
+    z.string().regex(/^[a-z][a-z0-9_]{0,39}$/i),
+    DatabaseSchema.extend({ all: z.boolean().optional() })
+      .refine((query) => !query.action || query.action === 'select'),
+  ).refine((queries) => Object.keys(queries).length <= 16),
+  schedule: z.boolean().optional(),
+}).strict()
+
+/**
+ * Bir nechta jadvalni bitta so‘rovda o‘qish: har biri `/api/db` bilan aynan bir xil
+ * ruxsat va ustun cheklovlaridan o‘tadi; `all` bo‘lsa sahifalar server ichida yig‘iladi.
+ */
+async function handleBootstrap(request, env, profile) {
+  if (!profile) return fail('Login required.', 401)
+  let payload
+  try { payload = await request.json() } catch { return fail('Invalid bootstrap request.') }
+  const parsed = BootstrapSchema.safeParse(payload)
+  if (!parsed.success) return fail('Invalid bootstrap request.')
+  if (profile.password_reset_required && profile.auth_method !== 'telegram') {
+    return fail('Davom etish uchun parolni yangilang.', 403)
+  }
+  const cache = new Map()
+  const entries = await Promise.all(Object.entries(parsed.data.queries).map(async ([key, query]) => {
+    const { all, ...body } = query
+    const denied = databaseAccessError(profile, false, body)
+    if (denied) return [key, { data: null, error: { message: denied.message, status: denied.status } }]
+    try {
+      if (!all) return [key, { data: await selectForResponse(request, env, profile, false, body, { cache }), error: null }]
+      const rows = []
+      for (let offset = 0; offset < 1_000_000; offset += BOOTSTRAP_PAGE_SIZE) {
+        const page = await selectForResponse(request, env, profile, false,
+          { ...body, maybeSingle: false, limit: BOOTSTRAP_PAGE_SIZE, offset },
+          { cache, maxPageSize: BOOTSTRAP_PAGE_SIZE })
+        rows.push(...page)
+        if (page.length < BOOTSTRAP_PAGE_SIZE) break
+      }
+      return [key, { data: rows, error: null }]
+    } catch (error) {
+      const { message, status } = databaseErrorStatus(error)
+      return [key, { data: null, error: { message, status } }]
+    }
+  }))
+  let schedule = null
+  if (parsed.data.schedule && canAccessEndpoint(profile.role, 'schedule:read')) {
+    schedule = await scheduleStatePayload(env, profile, cache)
+  }
+  return json({ data: { results: Object.fromEntries(entries), schedule } })
 }
 
 async function addHomeworkEvent(env, submission, eventType, actorId, details = {}) {
@@ -3309,13 +3411,25 @@ function teacherOwnsScheduleOnDate(group, state, teacherId, date) {
   ))
 }
 
-async function accessibleScheduleGroupIds(env, profile) {
+async function scheduleStatePayload(env, profile, cache = null) {
+  const groupIds = await accessibleScheduleGroupIds(env, profile, cache)
+  const state = await loadScheduleState(env, groupIds)
+  const versionsByGroup = Map.groupBy(state.versions, (version) => version.group_id)
+  const overridesByGroup = Map.groupBy(state.overrides, (override) => override.group_id)
+  return { groups: state.groups.map((group) => ({
+    group_id: group.id,
+    versions: versionsByGroup.get(group.id) || [],
+    overrides: overridesByGroup.get(group.id) || [],
+  })) }
+}
+
+async function accessibleScheduleGroupIds(env, profile, cache = null) {
   if (['owner', 'reception'].includes(profile.role)) {
     const { results } = await env.DB.prepare('SELECT id FROM groups ORDER BY name').all()
     return (results || []).map((row) => row.id)
   }
   if (profile.role === 'teacher') {
-    return ownedGroupIds(env, profile)
+    return ownedGroupIds(env, profile, cache)
   }
   if (profile.role === 'student' && profile.student_id) {
     const { results } = await env.DB.prepare('SELECT group_id FROM group_students WHERE student_id = ?')
@@ -3644,13 +3758,7 @@ async function handleScheduleRoutes(request, env, profile, pathname) {
 
   if (pathname === '/api/schedule/state' && request.method === 'GET') {
     if (!canAccessEndpoint(profile.role, 'schedule:read')) return fail('Ruxsat yo‘q.', 403)
-    const groupIds = await accessibleScheduleGroupIds(env, profile)
-    const state = await loadScheduleState(env, groupIds)
-    return json({ data: { groups: state.groups.map((group) => ({
-      group_id: group.id,
-      versions: state.versions.filter((version) => version.group_id === group.id),
-      overrides: state.overrides.filter((override) => override.group_id === group.id),
-    })) } })
+    return json({ data: await scheduleStatePayload(env, profile) })
   }
 
   if (pathname === '/api/schedule/history' && request.method === 'GET') {
@@ -4055,6 +4163,7 @@ async function handleRequest(request, env) {
     return handleRpc(request, env, profile, url.pathname.split('/').pop())
   }
   if (url.pathname === '/api/db') return handleDatabase(request, env, profile, service)
+  if (url.pathname === '/api/bootstrap' && request.method === 'POST') return handleBootstrap(request, env, profile)
   if (url.pathname === '/api/files' && request.method === 'POST') {
     if (!profile) return fail('Login required.', 401)
     if (!env.FILES) return fail('R2 binding is not configured.', 503)

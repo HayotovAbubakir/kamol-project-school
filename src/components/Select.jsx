@@ -37,7 +37,7 @@ export default function Select({
 
   const stringValue = value == null ? '' : String(value)
   const selected = normalized.find((opt) => opt.value === stringValue)
-  const display = selected?.label ?? placeholder ?? ''
+  const display = selected?.label ?? (placeholder || normalized.find((opt) => opt.value === '')?.label || '')
 
   const emit = (next) => {
     onChange?.({ target: { value: next, name } })

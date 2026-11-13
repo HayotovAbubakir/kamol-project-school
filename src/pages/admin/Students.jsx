@@ -1,4 +1,4 @@
-import { Banknote, Copy, GraduationCap, Pencil, Plus, Trash2, Wallet, X } from 'lucide-react'
+import { Banknote, Check, Copy, Eye, EyeOff, GraduationCap, KeyRound, Pencil, Plus, Trash2, Wallet, X } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import PhoneInput from '../../components/PhoneInput'
@@ -22,9 +22,9 @@ import { useDialog } from '../../context/DialogContext'
 import { useLanguage } from '../../context/LanguageContext'
 import { amountPaidForMonth, isStudentDebtor, remainingFee, studentPaidForMonth } from '../../lib/store'
 import { parseParentPhones, formatPhoneDisplay, isCompletePhone, isEmptyPhone, phoneFieldState } from '../../lib/phone'
-import { changeStudentPassword, revealStudentPassword, unlinkStudentTelegram } from '../../lib/api'
+import { changeStudentPassword, revealStudentPassword } from '../../lib/api'
 import { matchesSearch, studentSearchFields } from '../../lib/search'
-import { telegram } from '../../lib/data'
+import { translate as tr } from '../../i18n/runtime'
 import { currentMonthYear, formatDate, formatMoney, formatPhone, joinPersonName, splitPersonName, todayISO } from '../../lib/utils'
 import { loginBaseFromName } from '../../../shared/account-credentials.js'
 import FaceCapture from '../../components/face/FaceCapture.jsx'
@@ -59,8 +59,7 @@ export default function AdminStudents() {
   const [saving, setSaving] = useState(false)
   const [payOpen, setPayOpen] = useState(false)
   const [editingPayment, setEditingPayment] = useState(null)
-  const [inviteUrl, setInviteUrl] = useState('')
-  const [inviteBusy, setInviteBusy] = useState(false)
+  const [loginCopied, setLoginCopied] = useState(false)
   const [payAmount, setPayAmount] = useState('')
   const [paying, setPaying] = useState(false)
   const [addGroupId, setAddGroupId] = useState('')
@@ -134,16 +133,22 @@ export default function AdminStudents() {
     }
   }
 
-  async function unlinkTelegram() {
-    if (!selected) return
-    const confirmed = await confirm({ message: 'O‘quvchining Telegram akkauntini uzmoqchimisiz?', confirmLabel: 'Telegramdan uzish', tone: 'danger' })
-    if (!confirmed) return
+  async function copyLogin() {
+    if (!selected?.username) return
     try {
-      await unlinkStudentTelegram(selected.id)
-      await alert({ message: 'Telegram akkaunti uzildi.' })
-    } catch (unlinkError) {
-      await alert({ message: unlinkError.message || 'Telegram akkauntini uzib bo‘lmadi.', tone: 'danger' })
+      await navigator.clipboard.writeText(selected.username)
+      setLoginCopied(true)
+      window.setTimeout(() => setLoginCopied(false), 1500)
+    } catch (copyError) {
+      await alert({ message: copyError.message || 'Loginni nusxalab bo‘lmadi.', tone: 'danger' })
     }
+  }
+
+  function openPasswordModal() {
+    if (!selected) return
+    setPasswordForm({ username: selected.username || '', password: '' })
+    setError('')
+    setPasswordOpen(true)
   }
 
   useEffect(() => {
@@ -169,26 +174,13 @@ export default function AdminStudents() {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setAddGroupId('')
     setRevealedPassword('')
+    setLoginCopied(false)
     if (passwordTimer.current) window.clearTimeout(passwordTimer.current)
   }, [selected?.id])
 
   useEffect(() => () => {
     if (passwordTimer.current) window.clearTimeout(passwordTimer.current)
   }, [])
-
-  const issueTelegramInvite = async () => {
-    if (!selected || inviteBusy) return
-    setInviteBusy(true)
-    setError('')
-    try {
-      const invite = await telegram.createInvite({ studentId: selected.id })
-      setInviteUrl(invite.invite_url)
-    } catch (inviteError) {
-      setError(inviteError.message || 'Telegram ulash havolasini yaratib bo‘lmadi.')
-    } finally {
-      setInviteBusy(false)
-    }
-  }
 
   const setStudentGroups = async (student, nextIds) => {
     setGroupBusy(true)
@@ -433,14 +425,22 @@ export default function AdminStudents() {
       .map((id) => data.groups.find((g) => g.id === id))
       .filter(Boolean)
     const availableGroups = data.groups.filter((g) => !(selected.groupIds || []).includes(g.id))
+    const payments = data.payments
+      .filter((payment) => payment.studentId === selected.id)
+      .sort((left, right) => String(right.paidAt).localeCompare(String(left.paidAt)))
 
     return (
-      <>
-        <div className="master-detail-head">
+      <div className="student-card">
+        <header className="student-card-head">
           <Avatar name={selected.name} />
-          <div className="master-detail-head-main">
+          <div className="student-card-id">
             <h2>{selected.name}</h2>
             <p>{selected.phone ? formatPhone(selected.phone) : t('admin.student.phoneMissing')}</p>
+            {groups.length > 0 && (
+              <div className="student-card-chips">
+                {groups.map((g) => <span key={g.id} className="student-card-chip">{g.name}</span>)}
+              </div>
+            )}
           </div>
           <StatusBadge tone={!hasFee ? 'neutral' : paid ? 'success' : paidAmount > 0 ? 'warning' : 'danger'}>
             {!hasFee
@@ -451,182 +451,183 @@ export default function AdminStudents() {
                   ? t('admin.status.partial')
                   : t('admin.status.unpaid')}
           </StatusBadge>
-          {user?.role === 'owner' && <button
-            type="button"
-            className="btn-icon-danger master-detail-delete"
-            onClick={() => remove(selected)}
-            aria-label={t('common.delete')}
-            title={t('common.delete')}
-          >
-            <Trash2 size={15} />
-          </button>}
+        </header>
+
+        <div className="student-card-money">
+          <div>
+            <span>{t('admin.label.monthlyFee')}</span>
+            <strong>{formatMoney(selected.monthlyFee)}</strong>
+          </div>
+          <div>
+            <span>{t('admin.label.paidThisMonth')}</span>
+            <strong>{formatMoney(paidAmount)}</strong>
+          </div>
+          <div>
+            <span>{t('admin.label.remaining')}</span>
+            <strong className={due > 0 ? 'money-text money-text-danger' : ''}>{formatMoney(due)}</strong>
+          </div>
         </div>
 
-        <div className="student-detail-stack">
-          <div className="student-detail-grid">
-            <div className="detail-meta-item student-detail-cell-2">
-              <span>{t('admin.label.monthlyFee')}</span>
-              <strong>{formatMoney(selected.monthlyFee)}</strong>
-            </div>
-            <div className="detail-meta-item student-detail-cell-2">
-              <span>{t('admin.label.paidThisMonth')}</span>
-              <strong>{formatMoney(paidAmount)}</strong>
-            </div>
-            <div className="detail-meta-item student-detail-cell-2">
-              <span>{t('admin.label.remaining')}</span>
-              <strong className={due > 0 ? 'money-text money-text-danger' : ''}>{formatMoney(due)}</strong>
-            </div>
-
-            <div className="detail-meta-item student-detail-cell-3">
-              <span>Mini App login</span>
-              <div className="student-code-row">
-                <strong>{selected.username || '—'}</strong>
-                {selected.username && <button type="button" className="btn btn-outline btn-sm" onClick={async () => {
-                  try { await navigator.clipboard.writeText(selected.username) } catch (copyError) {
-                    await alert({ message: copyError.message || 'Loginni nusxalab bo‘lmadi.', tone: 'danger' })
-                  }
-                }}><Copy size={14} /> Nusxalash</button>}
-              </div>
-            </div>
-            <div className="detail-meta-item student-detail-cell-3">
-              <span>O‘quvchi paroli</span>
-              {revealedPassword
-                ? <strong aria-live="polite">{revealedPassword}</strong>
-                : <span>Parol yashirilgan</span>}
-              <div className="student-detail-actions">
-                <button type="button" className="btn btn-outline btn-sm" onClick={revealPassword}>Parolni ko‘rsatish</button>
-                <button type="button" className="btn btn-outline btn-sm" onClick={() => {
-                  setPasswordForm({ username: selected.username || '', password: '' })
-                  setError('')
-                  setPasswordOpen(true)
-                }}>Login / parolni o‘zgartirish</button>
-              </div>
-            </div>
-
-            {(() => {
-              const { fatherPhone, motherPhone } = parseParentPhones(selected.parentPhone)
-              return (
-                <>
-                  <div className="detail-meta-item student-detail-cell-3">
-                    <span>{t('admin.label.fatherPhone')}</span>
-                    <strong>{fatherPhone ? formatPhoneDisplay(fatherPhone) : '—'}</strong>
-                  </div>
-                  <div className="detail-meta-item student-detail-cell-3">
-                    <span>{t('admin.label.motherPhone')}</span>
-                    <strong>{motherPhone ? formatPhoneDisplay(motherPhone) : '—'}</strong>
-                  </div>
-                </>
-              )
-            })()}
-          </div>
-
-          <div className="student-detail-actions">
-            <button type="button" className="btn btn-primary btn-sm" onClick={openPay} disabled={due <= 0}>
-              <Banknote size={14} /> {t('admin.action.markPaid')}
+        <div className="student-card-actions">
+          <button type="button" className="btn btn-primary btn-sm" onClick={openPay} disabled={due <= 0}>
+            <Banknote size={15} /> {t('admin.action.markPaid')}
+          </button>
+          <button type="button" className="btn btn-outline btn-sm" onClick={() => openEdit(selected)}>
+            <Pencil size={15} /> {t('common.edit')}
+          </button>
+          <div className="student-card-actions-end">
+            <button type="button" className="btn btn-outline btn-sm" onClick={openPasswordModal}>
+              <KeyRound size={15} /> {tr('Login / parol')}
             </button>
-            <button type="button" className="btn btn-outline btn-sm" onClick={() => openEdit(selected)}>
-              <Pencil size={14} /> {t('common.edit')}
-            </button>
-            <button type="button" className="btn btn-outline btn-sm" onClick={issueTelegramInvite} disabled={inviteBusy}>
-              {inviteBusy ? 'Tayyorlanmoqda…' : 'Telegram ulash havolasi'}
-            </button>
-            <span className="text-sm">{selected.telegramLinked ? 'Telegram ulangan' : 'Telegram ulanmagan'}</span>
-            {selected.telegramLinked && <button type="button" className="btn btn-outline btn-sm" onClick={unlinkTelegram}>Telegramdan uzish</button>}
-            {inviteUrl ? <a className="mini-link" href={inviteUrl} target="_blank" rel="noreferrer">Havolani ochish</a> : null}
-          </div>
-
-          <FacePhotosPanel
-            key={selected.id}
-            studentId={selected.id}
-            labels={faceLabels}
-            confirm={(message) => confirm({ message, confirmLabel: faceLabels.delete(), tone: 'danger' })}
-          />
-
-          <section className="card" aria-label="To‘lovlar tarixi">
-            <div className="card-header"><strong>To‘lovlar tarixi</strong></div>
-            <div className="card-body">
-              {data.payments.filter((payment) => payment.studentId === selected.id).length ? (
-                <div className="grid gap-2">
-                  {data.payments.filter((payment) => payment.studentId === selected.id)
-                    .sort((left, right) => String(right.paidAt).localeCompare(String(left.paidAt)))
-                    .map((payment) => (
-                      <div key={payment.id} className="flex flex-wrap items-center justify-between gap-2 border-b border-[var(--border)] py-2">
-                        <div>
-                          <strong className={payment.voidedAt ? 'line-through text-muted' : undefined}>{formatMoney(payment.amount)}</strong>
-                          <span className="ml-2 text-sm text-muted">{payment.month}/{payment.year} · {formatDate(payment.paidAt)}</span>
-                          {payment.voidedAt && (
-                            <StatusBadge tone="neutral">
-                              Bekor qilingan{payment.voidReason ? ` · ${payment.voidReason}` : ''}
-                            </StatusBadge>
-                          )}
-                        </div>
-                        {user?.role === 'owner' && !payment.voidedAt && (
-                          <div className="flex gap-2">
-                            <button type="button" className="btn btn-outline btn-sm" onClick={() => openPaymentEdit(payment)}>Tahrirlash</button>
-                            <button type="button" className="btn btn-outline btn-sm" onClick={() => removePaymentRecord(payment)}>Bekor qilish</button>
-                          </div>
-                        )}
-                      </div>
-                    ))}
-                </div>
-              ) : <p className="text-sm text-muted">To‘lov tarixi yo‘q.</p>}
-            </div>
-          </section>
-
-          <div className="student-groups-block">
-            <div className="student-groups-label">{t('admin.label.groups')}</div>
-            {groups.length === 0 ? (
-              <span className="student-groups-empty">{t('admin.group.notAssigned')}</span>
-            ) : (
-              <div className="student-groups-chips">
-                {groups.map((g) => (
-                  <span key={g.id} className="student-group-tag">
-                    {g.name}
-                    <em>{formatMoney(g.monthlyFee || 0)}</em>
-                    <button
-                      type="button"
-                      className="student-group-remove"
-                      disabled={groupBusy}
-                      onClick={() => removeStudentFromGroup(g.id)}
-                      aria-label={t('admin.group.removeStudent')}
-                      title={t('admin.group.removeStudent')}
-                    >
-                      <X size={14} />
-                    </button>
-                  </span>
-                ))}
-              </div>
+            {user?.role === 'owner' && (
+              <button
+                type="button"
+                className="btn btn-outline btn-sm btn-icon-only student-card-delete"
+                onClick={() => remove(selected)}
+                aria-label={t('common.delete')}
+                title={t('common.delete')}
+              >
+                <Trash2 size={15} />
+              </button>
             )}
+          </div>
+        </div>
 
-            {data.groups.length === 0 ? (
-              <p className="student-groups-empty">{t('admin.student.openGroupFirst')}</p>
-            ) : availableGroups.length > 0 ? (
-              <div className="student-groups-add-row">
-                <Select
-                  value={addGroupId}
-                  disabled={groupBusy}
-                  onChange={(e) => setAddGroupId(e.target.value)}
-                  options={[
-                    { value: '', label: t('admin.group.select') },
-                    ...availableGroups.map((g) => ({
-                      value: g.id,
-                      label: `${g.name} — ${formatMoney(g.monthlyFee || 0)}`,
-                    })),
-                  ]}
-                />
+        {(() => {
+          const { fatherPhone, motherPhone } = parseParentPhones(selected.parentPhone)
+          return (
+            <dl className="student-card-info">
+              <div>
+                <dt>{tr('Login')}</dt>
+                <dd><strong>{selected.username || '—'}</strong></dd>
+                {selected.username ? (
+                  <button type="button" className="student-card-icon-btn" onClick={copyLogin} aria-label={tr('Nusxalash')} title={tr('Nusxalash')}>
+                    {loginCopied ? <Check size={15} /> : <Copy size={15} />}
+                  </button>
+                ) : <span />}
+              </div>
+              <div>
+                <dt>{tr('Parol')}</dt>
+                <dd>
+                  {revealedPassword
+                    ? <strong aria-live="polite">{revealedPassword}</strong>
+                    : <strong className="student-card-secret" aria-label={tr('Parol yashirilgan')}>••••••••</strong>}
+                </dd>
                 <button
                   type="button"
-                  className="btn btn-primary btn-sm"
-                  disabled={!addGroupId || groupBusy}
-                  onClick={() => addStudentToGroup(addGroupId)}
+                  className="student-card-icon-btn"
+                  onClick={revealedPassword ? () => setRevealedPassword('') : revealPassword}
+                  aria-label={revealedPassword ? tr('Parolni yashirish') : tr('Parolni ko‘rsatish')}
+                  title={revealedPassword ? tr('Parolni yashirish') : tr('Parolni ko‘rsatish')}
                 >
-                  <Plus size={14} /> {t('admin.action.addToGroup')}
+                  {revealedPassword ? <EyeOff size={15} /> : <Eye size={15} />}
                 </button>
               </div>
-            ) : null}
-          </div>
-        </div>
-      </>
+              {fatherPhone ? (
+                <div>
+                  <dt>{t('admin.label.fatherPhone')}</dt>
+                  <dd>{formatPhoneDisplay(fatherPhone)}</dd>
+                  <span />
+                </div>
+              ) : null}
+              {motherPhone ? (
+                <div>
+                  <dt>{t('admin.label.motherPhone')}</dt>
+                  <dd>{formatPhoneDisplay(motherPhone)}</dd>
+                  <span />
+                </div>
+              ) : null}
+            </dl>
+          )
+        })()}
+
+        <FacePhotosPanel
+          key={selected.id}
+          studentId={selected.id}
+          labels={faceLabels}
+          confirm={(message) => confirm({ message, confirmLabel: faceLabels.delete(), tone: 'danger' })}
+        />
+
+        <section className="student-card-section" aria-label={tr('To‘lovlar tarixi')}>
+          <h3>{tr('To‘lovlar tarixi')}</h3>
+          {payments.length ? (
+            <ul className="student-payments">
+              {payments.map((payment) => (
+                <li key={payment.id} className={payment.voidedAt ? 'is-voided' : undefined}>
+                  <div className="student-payment-main">
+                    <strong>{formatMoney(payment.amount)}</strong>
+                    <span>{payment.month}/{payment.year} · {formatDate(payment.paidAt)}</span>
+                  </div>
+                  {payment.voidedAt ? (
+                    <StatusBadge tone="neutral">
+                      {tr('Bekor qilingan')}{payment.voidReason ? ` · ${payment.voidReason}` : ''}
+                    </StatusBadge>
+                  ) : user?.role === 'owner' ? (
+                    <div className="student-payment-actions">
+                      <button type="button" className="btn btn-outline btn-sm" onClick={() => openPaymentEdit(payment)}>{tr('Tahrirlash')}</button>
+                      <button type="button" className="btn btn-outline btn-sm" onClick={() => removePaymentRecord(payment)}>{tr('Bekor qilish')}</button>
+                    </div>
+                  ) : null}
+                </li>
+              ))}
+            </ul>
+          ) : <p className="student-card-empty">{tr('To‘lov tarixi yo‘q.')}</p>}
+        </section>
+
+        <section className="student-card-section student-groups-block" aria-label={t('admin.label.groups')}>
+          <h3>{t('admin.label.groups')}</h3>
+          {groups.length === 0 ? (
+            <span className="student-groups-empty">{t('admin.group.notAssigned')}</span>
+          ) : (
+            <div className="student-groups-chips">
+              {groups.map((g) => (
+                <span key={g.id} className="student-group-tag">
+                  {g.name}
+                  <em>{formatMoney(g.monthlyFee || 0)}</em>
+                  <button
+                    type="button"
+                    className="student-group-remove"
+                    disabled={groupBusy}
+                    onClick={() => removeStudentFromGroup(g.id)}
+                    aria-label={t('admin.group.removeStudent')}
+                    title={t('admin.group.removeStudent')}
+                  >
+                    <X size={14} />
+                  </button>
+                </span>
+              ))}
+            </div>
+          )}
+
+          {data.groups.length === 0 ? (
+            <p className="student-groups-empty">{t('admin.student.openGroupFirst')}</p>
+          ) : availableGroups.length > 0 ? (
+            <div className="student-groups-add-row">
+              <Select
+                value={addGroupId}
+                disabled={groupBusy}
+                onChange={(e) => setAddGroupId(e.target.value)}
+                aria-label={t('admin.group.select')}
+                options={[
+                  { value: '', label: t('admin.group.select') },
+                  ...availableGroups.map((g) => ({
+                    value: g.id,
+                    label: `${g.name} — ${formatMoney(g.monthlyFee || 0)}`,
+                  })),
+                ]}
+              />
+              <button
+                type="button"
+                className="btn btn-primary btn-sm"
+                disabled={!addGroupId || groupBusy}
+                onClick={() => addStudentToGroup(addGroupId)}
+              >
+                <Plus size={14} /> {t('admin.action.addToGroup')}
+              </button>
+            </div>
+          ) : null}
+        </section>
+      </div>
     )
   }
 

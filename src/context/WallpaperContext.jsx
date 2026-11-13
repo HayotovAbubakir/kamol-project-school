@@ -12,7 +12,8 @@ import {
 import { useTheme } from './ThemeContext'
 
 const WallpaperContext = createContext(null)
-const PRESET_STORAGE_KEY = 'kamol-live-wallpapers'
+// v2: defaults switched to the neutral "plain" presets; earlier saves held the old tinted defaults.
+const PRESET_STORAGE_KEY = 'kamol-live-wallpapers-v2'
 const SOURCE_STORAGE_KEY = 'kamol-wallpaper-source'
 
 function getInitialPresets() {

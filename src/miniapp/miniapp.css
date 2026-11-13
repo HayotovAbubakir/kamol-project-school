@@ -32,10 +32,10 @@
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-  --mini-bg: #101a2b;
-  --mini-card: #17243a;
-  --mini-text: #f4f7fb;
-  --mini-muted: #a3b2c7;
+  --mini-bg: #0c0c0d;
+  --mini-card: #18181b;
+  --mini-text: #f4f4f5;
+  --mini-muted: #a1a1aa;
   --mini-accent: #4b9cf5;
   --mini-accent-text: #ffffff;
   /* Derived from the Telegram text colour so borders stay visible in the light theme too. */
@@ -599,6 +599,17 @@ textarea {
 .mini-field select:focus,
 .mini-field textarea:focus {
   outline: 2px solid var(--mini-focus);
+}
+
+/* Desktop Telegram / browsers draw the open list from these, not from the OS default. */
+select {
+  color-scheme: inherit;
+}
+
+select option,
+select optgroup {
+  background-color: var(--mini-card);
+  color: var(--mini-text);
 }
 
 .mini-panel,

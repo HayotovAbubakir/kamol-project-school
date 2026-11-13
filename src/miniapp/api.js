@@ -107,15 +107,19 @@ export async function loadHomeworks(profile) {
   homeworks = unwrap(await query)
   if (!homeworks.length) return []
 
-  const submissions = unwrap(await cloudflare.from('homework_submissions')
-    .select('id, homework_id, student_id, attempt_number, content_text, file_url, video_note_url, voice_url, status, state, student_result, teacher_result, feedback, submitted_at, students(name)')
-    .in('homework_id', homeworks.map((task) => task.id))
-    .order('attempt_number', { ascending: false })
-    .limit(500))
-  const review = await workerApi('/api/homework/review')
+  const [submissionRows, review] = await Promise.all([
+    cloudflare.from('homework_submissions')
+      .select('id, homework_id, student_id, attempt_number, content_text, file_url, video_note_url, voice_url, status, state, student_result, teacher_result, feedback, submitted_at, students(name)')
+      .in('homework_id', homeworks.map((task) => task.id))
+      .order('attempt_number', { ascending: false })
+      .limit(500),
+    workerApi('/api/homework/review'),
+  ])
+  const submissions = unwrap(submissionRows)
+  const reviewById = new Map(review.submissions.map((item) => [item.id, item]))
   const byHomework = new Map()
   for (const submission of submissions) {
-    const enhanced = review.submissions.find((item) => item.id === submission.id)
+    const enhanced = reviewById.get(submission.id)
     const list = byHomework.get(submission.homework_id) || []
     list.push({ ...submission, files: enhanced?.files || [], student_name: enhanced?.student_name || submission.students?.name })
     byHomework.set(submission.homework_id, list)
@@ -132,18 +136,17 @@ export async function loadGroups(profile) {
   const columns = profile?.role === 'teacher'
     ? 'id, name, teacher_id, schedule'
     : 'id, name, teacher_id, monthly_fee, schedule'
-  const rows = unwrap(await cloudflare.from('groups')
-    .select(columns)
-    .order('name')
-    .all())
-  const scheduleState = await workerApi('/api/schedule/state')
-  const stateByGroup = new Map((scheduleState.groups || []).map((state) => [state.group_id, state]))
   // Narx tarixi: o‘tgan oy qarzlari o‘sha oydagi narxda hisoblanadi. Jadval yo‘q bo‘lsa — joriy narx.
-  let feeHistoryByGroup = new Map()
-  if (canAccessTable(profile?.role, 'group_fee_history')) {
-    const history = await cloudflare.from('group_fee_history').select('group_id, monthly_fee, valid_from').order('group_id').all()
-    if (!history.error) feeHistoryByGroup = groupFeeHistoryByGroup(history.data || [])
-  }
+  const [groupRows, scheduleState, history] = await Promise.all([
+    cloudflare.from('groups').select(columns).order('name').all(),
+    workerApi('/api/schedule/state'),
+    canAccessTable(profile?.role, 'group_fee_history')
+      ? cloudflare.from('group_fee_history').select('group_id, monthly_fee, valid_from').order('group_id').all()
+      : { data: [], error: null },
+  ])
+  const rows = unwrap(groupRows)
+  const stateByGroup = new Map((scheduleState.groups || []).map((state) => [state.group_id, state]))
+  const feeHistoryByGroup = history.error ? new Map() : groupFeeHistoryByGroup(history.data || [])
   return rows.map((group) => ({
     ...group,
     feeHistory: feeHistoryByGroup.get(group.id) || [],
@@ -294,10 +297,23 @@ export async function loadStudents(profile) {
     : profile?.role === 'owner' || profile?.role === 'reception'
       ? 'id, name, phone, parent_phone, monthly_fee, login, telegram_id'
       : 'id, name, phone, parent_phone, monthly_fee'
-  const students = unwrap(await cloudflare.from('students').select(columns).order('name').all())
-  if (!students.length) return students
   // A’zolik: guruh kartalaridagi o‘quvchi soni, davomat ro‘yxati va oylik to‘lov hisobi uchun kerak.
-  const memberships = unwrap(await cloudflare.from('group_students').select('group_id, student_id').order('group_id').all())
+  // Qabulxonada `profiles` jadvaliga ruxsat yo‘q — so‘rasa butun yuklash 403 bilan to‘xtardi.
+  // Telegram holati: Mini App profili yoki bot orqali kod bilan ulanish (`telegram_links`).
+  const staffRole = profile?.role !== 'teacher'
+  const [studentRows, membershipRows, profileRows, linkRows] = await Promise.all([
+    cloudflare.from('students').select(columns).order('name').all(),
+    cloudflare.from('group_students').select('group_id, student_id').order('group_id').all(),
+    staffRole && canAccessTable(profile?.role, 'profiles')
+      ? cloudflare.from('profiles').select('id, student_id, telegram_id').eq('role', 'student').all()
+      : { data: [], error: null },
+    staffRole && canAccessTable(profile?.role, 'telegram_links')
+      ? cloudflare.from('telegram_links').select('chat_id, student_id').order('student_id').all()
+      : { data: [], error: null },
+  ])
+  const students = unwrap(studentRows)
+  if (!students.length) return students
+  const memberships = unwrap(membershipRows)
   const groupIdsByStudent = new Map()
   for (const row of memberships) {
     const list = groupIdsByStudent.get(row.student_id) || []
@@ -306,15 +322,8 @@ export async function loadStudents(profile) {
   }
   const withGroups = students.map((item) => ({ ...item, group_ids: groupIdsByStudent.get(item.id) || [] }))
   if (profile?.role === 'teacher') return withGroups
-  // Qabulxonada `profiles` jadvaliga ruxsat yo‘q — so‘rasa butun yuklash 403 bilan to‘xtardi.
-  // Telegram holati: Mini App profili yoki bot orqali kod bilan ulanish (`telegram_links`).
-  const studentIds = students.map((student) => student.id)
-  const profiles = canAccessTable(profile?.role, 'profiles')
-    ? unwrap(await cloudflare.from('profiles').select('id, student_id, telegram_id').in('student_id', studentIds).all())
-    : []
-  const links = canAccessTable(profile?.role, 'telegram_links')
-    ? unwrap(await cloudflare.from('telegram_links').select('chat_id, student_id').order('student_id').all())
-    : []
+  const profiles = unwrap(profileRows).filter((item) => item.student_id)
+  const links = unwrap(linkRows)
   const byStudent = new Map(profiles.map((item) => [item.student_id, item]))
   const linkByStudent = new Map(links.map((item) => [item.student_id, item.chat_id]))
   return withGroups.map((item) => ({

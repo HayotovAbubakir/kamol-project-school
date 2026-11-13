@@ -131,6 +131,19 @@ beforeAll(async () => {
     "CREATE TABLE schedule_notification_outbox (id TEXT PRIMARY KEY, change_id TEXT NOT NULL, recipient_id TEXT NOT NULL, recipient_name TEXT NOT NULL DEFAULT '', channel TEXT NOT NULL, notification_kind TEXT NOT NULL, telegram_id INTEGER, message TEXT NOT NULL, status TEXT NOT NULL, scheduled_at TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, next_attempt_at TEXT NOT NULL, last_error TEXT, sent_at TEXT, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, UNIQUE(change_id, recipient_id, channel, notification_kind))",
     "CREATE TABLE expenses (id TEXT PRIMARY KEY, title TEXT NOT NULL, amount REAL NOT NULL, category TEXT NOT NULL DEFAULT 'Operatsion', date TEXT NOT NULL DEFAULT (date('now')), recorded_by TEXT, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)",
     "CREATE INDEX payment_audit_payment_idx ON payment_audit(payment_id)",
+    // migrations/0010_perf_indexes.sql
+    'CREATE INDEX IF NOT EXISTS payments_student_paid_at_idx ON payments(student_id, paid_at)',
+    'CREATE INDEX IF NOT EXISTS payment_audit_created_at_idx ON payment_audit(created_at)',
+    'CREATE INDEX IF NOT EXISTS attendance_group_date_idx ON attendance(group_id, date)',
+    'CREATE INDEX IF NOT EXISTS attendance_student_date_idx ON attendance(student_id, date)',
+    'CREATE INDEX IF NOT EXISTS homework_teacher_due_idx ON homework(teacher_id, due_at)',
+    'CREATE INDEX IF NOT EXISTS homework_due_at_idx ON homework(due_at)',
+    'CREATE INDEX IF NOT EXISTS homework_submissions_draft_expiry_idx ON homework_submissions(state, expires_at)',
+    'CREATE INDEX IF NOT EXISTS salary_payments_paid_at_idx ON salary_payments(paid_at)',
+    'CREATE INDEX IF NOT EXISTS salary_payments_teacher_idx ON salary_payments(teacher_id)',
+    'CREATE INDEX IF NOT EXISTS expenses_date_idx ON expenses(date)',
+    'CREATE INDEX IF NOT EXISTS face_sync_device_employee_idx ON face_sync(device_id, employee_no, version)',
+    'CREATE INDEX IF NOT EXISTS face_lesson_closures_date_idx ON face_lesson_closures(date)',
     `CREATE VIEW monthly_homework_report AS
       SELECT st.id AS student_id, st.name AS student_name,
         date(substr(COALESCE(h.due_at, h.created_at), 1, 7) || '-01') AS month_start,
@@ -2055,5 +2068,107 @@ describe('Face ID attendance', () => {
     expect(removed.status).toBe(200)
     const deletion = (await (await request('/api/face/device/pending', { headers: auth })).json()).data.items
     expect(deletion).toEqual([expect.objectContaining({ employee_no: absent, action: 'delete', photos: [] })])
+  })
+})
+
+describe('batched bootstrap reads', () => {
+  async function staffSession(owner, role, name, password) {
+    const created = (await (await request('/api/staff', {
+      method: 'POST',
+      token: owner.access_token,
+      body: { name, role, password },
+    })).json()).data
+    return (await (await request('/api/auth/login', {
+      method: 'POST',
+      body: { username: created.username, password },
+    })).json()).session
+  }
+
+  const bootstrap = (token, body) => request('/api/bootstrap', { method: 'POST', token, body })
+  const dbSelect = async (token, body) => (await (await request('/api/db', { method: 'POST', token, body })).json()).data
+
+  it('returns the same rows as /api/db, pages past 500 rows on the server, and includes schedule state', async () => {
+    const owner = await loginOwner()
+    await env.DB.batch(Array.from({ length: 520 }, (_, index) => env.DB
+      .prepare('INSERT INTO expenses (id, title, amount, category, date) VALUES (?, ?, ?, ?, ?)')
+      .bind(`bootstrap-expense-${index}`, `Bulk ${index}`, 1000, 'Operatsion', '2026-03-01')))
+    const response = await bootstrap(owner.access_token, {
+      queries: {
+        expenses: { table: 'expenses', order: { column: 'date', ascending: false }, all: true },
+        teachers: { table: 'teachers', order: { column: 'created_at', ascending: true } },
+        groups: { table: 'groups', columns: 'id, name, monthly_fee', order: { column: 'created_at', ascending: true }, all: true },
+      },
+      schedule: true,
+    })
+    expect(response.status).toBe(200)
+    const { data } = await response.json()
+    const total = await env.DB.prepare('SELECT COUNT(*) AS n FROM expenses').first()
+    expect(total.n).toBeGreaterThan(500)
+    expect(data.results.expenses).toMatchObject({ error: null })
+    expect(data.results.expenses.data).toHaveLength(total.n)
+    expect(data.results.teachers.data).toEqual(await dbSelect(owner.access_token, { table: 'teachers', order: { column: 'created_at', ascending: true } }))
+    expect(data.results.groups.data).toEqual(await dbSelect(owner.access_token, { table: 'groups', columns: 'id, name, monthly_fee', order: { column: 'created_at', ascending: true }, limit: 500 }))
+    const schedule = await request('/api/schedule/state', { token: owner.access_token })
+    expect(data.schedule).toEqual((await schedule.json()).data)
+  })
+
+  it('applies the same per-table role, row, and column rules as /api/db', async () => {
+    const owner = await loginOwner()
+    const teacher = await staffSession(owner, 'teacher', 'Bootstrap Teacher', 'bootstrap-teacher-123')
+    const teacherId = teacher.user.teacher_id
+    const ownGroup = crypto.randomUUID()
+    const otherGroup = crypto.randomUUID()
+    const ownStudent = crypto.randomUUID()
+    const otherStudent = crypto.randomUUID()
+    await env.DB.batch([
+      env.DB.prepare('INSERT INTO groups (id, name, teacher_id, monthly_fee, schedule) VALUES (?, ?, ?, ?, ?)').bind(ownGroup, 'Bootstrap Own', teacherId, 300000,
+        JSON.stringify([{ slotId: 'slot-0', day: 3, startTime: '07:00', endTime: '07:30', teacherId }])),
+      env.DB.prepare('INSERT INTO groups (id, name, teacher_id, monthly_fee, schedule) VALUES (?, ?, ?, ?, ?)').bind(otherGroup, 'Bootstrap Other', null, 300000, '[]'),
+      env.DB.prepare('INSERT INTO students (id, name) VALUES (?, ?)').bind(ownStudent, 'Bootstrap Own Student'),
+      env.DB.prepare('INSERT INTO students (id, name) VALUES (?, ?)').bind(otherStudent, 'Bootstrap Other Student'),
+      env.DB.prepare('INSERT INTO group_students (group_id, student_id) VALUES (?, ?)').bind(ownGroup, ownStudent),
+      env.DB.prepare('INSERT INTO group_students (group_id, student_id) VALUES (?, ?)').bind(otherGroup, otherStudent),
+      env.DB.prepare("INSERT INTO attendance (id, student_id, group_id, date, status) VALUES (?, ?, ?, '2026-04-01', 'present')").bind(crypto.randomUUID(), ownStudent, ownGroup),
+      env.DB.prepare("INSERT INTO attendance (id, student_id, group_id, date, status) VALUES (?, ?, ?, '2026-04-01', 'absent')").bind(crypto.randomUUID(), otherStudent, otherGroup),
+    ])
+    const queries = {
+      groups: { table: 'groups', columns: 'id, name, teacher_id, schedule', order: { column: 'created_at', ascending: true } },
+      students: { table: 'students', columns: 'id, name, phone', order: { column: 'created_at', ascending: true } },
+      links: { table: 'group_students', order: { column: 'group_id', ascending: true } },
+      attendance: { table: 'attendance', order: { column: 'date', ascending: false } },
+    }
+    const response = await bootstrap(teacher.access_token, {
+      queries: {
+        ...Object.fromEntries(Object.entries(queries).map(([key, query]) => [key, { ...query, all: true }])),
+        payments: { table: 'payments', all: true },
+        fees: { table: 'groups', columns: 'id, monthly_fee' },
+        profiles: { table: 'profiles' },
+      },
+      schedule: true,
+    })
+    expect(response.status).toBe(200)
+    const { data } = await response.json()
+    for (const [key, query] of Object.entries(queries)) {
+      expect(data.results[key].error).toBeNull()
+      expect(data.results[key].data).toEqual(await dbSelect(teacher.access_token, query))
+    }
+    expect(data.results.groups.data.map((group) => group.id)).toEqual([ownGroup])
+    expect(data.results.students.data.map((student) => student.id)).toEqual([ownStudent])
+    expect(data.results.attendance.data.map((row) => row.student_id)).toEqual([ownStudent])
+    expect(data.results.payments).toEqual({ data: null, error: { message: 'Access denied.', status: 403 } })
+    expect(data.results.fees).toEqual({ data: null, error: { message: 'Access denied', status: 403 } })
+    expect(data.results.profiles.error.status).toBe(403)
+    const schedule = await request('/api/schedule/state', { token: teacher.access_token })
+    expect(data.schedule).toEqual((await schedule.json()).data)
+  })
+
+  it('rejects anonymous, write, oversized, and malformed batches', async () => {
+    const owner = await loginOwner()
+    expect((await bootstrap(null, { queries: { teachers: { table: 'teachers' } } })).status).toBe(401)
+    expect((await bootstrap(owner.access_token, { queries: { expenses: { table: 'expenses', action: 'insert', values: { title: 'x', amount: 1 } } } })).status).toBe(400)
+    expect((await bootstrap(owner.access_token, { queries: { users: { table: 'users' } } })).status).toBe(400)
+    expect((await bootstrap(owner.access_token, { queries: { teachers: { table: 'teachers' } }, extra: true })).status).toBe(400)
+    const many = Object.fromEntries(Array.from({ length: 17 }, (_, index) => [`q${index}`, { table: 'teachers' }]))
+    expect((await bootstrap(owner.access_token, { queries: many })).status).toBe(400)
   })
 })

@@ -67,7 +67,7 @@
 }
 
 .face-capture-step.is-active {
-  border-color: var(--primary, #2563eb);
+  border-color: var(--accent, var(--mini-accent, #5b8c7e));
 }
 
 .face-capture-step.is-done span:last-child::after {
@@ -142,15 +142,17 @@
 .face-btn {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  min-height: 36px;
-  padding: 6px 12px;
-  border: 1px solid var(--border, rgba(127, 127, 127, 0.35));
-  border-radius: 10px;
+  justify-content: center;
+  gap: 8px;
+  min-height: 40px;
+  padding: 8px 14px;
+  border: 1px solid var(--border, var(--mini-border, rgba(127, 127, 127, 0.35)));
+  border-radius: 12px;
   background: transparent;
   color: inherit;
   font: inherit;
-  font-size: 13px;
+  font-size: 14px;
+  font-weight: 600;
   cursor: pointer;
 }
 
@@ -161,20 +163,30 @@
 
 .face-btn-primary {
   border-color: transparent;
-  background: var(--primary, #2563eb);
-  color: #fff;
+  background: var(--accent, var(--mini-accent, #5b8c7e));
+  color: var(--mini-accent-text, #fff);
 }
 
 .face-icon-btn {
   display: inline-grid;
   place-items: center;
-  width: 26px;
-  height: 26px;
+  width: 32px;
+  height: 32px;
   border: 0;
   border-radius: 8px;
   background: transparent;
   color: #dc2626;
   cursor: pointer;
+}
+
+.miniapp .face-btn {
+  min-height: 44px;
+  padding: 10px 16px;
+}
+
+.miniapp .face-icon-btn {
+  width: 44px;
+  height: 44px;
 }
 
 .face-badge {

@@ -1,5 +1,6 @@
-import { Copy, KeyRound, Link, Pencil, Plus, Shield } from 'lucide-react'
+import { KeyRound, Pencil, Plus, Shield } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
+import Select from '../../components/Select'
 import { PageEnter } from '../../components/motion/PageMotion'
 import {
   Avatar,
@@ -14,7 +15,6 @@ import {
 import { useData } from '../../context/DataContext'
 import { useLanguage } from '../../context/LanguageContext'
 import { staff as staffAccounts } from '../../lib/data/index.js'
-import { telegram } from '../../lib/data/index.js'
 import { useDialog } from '../../context/DialogContext'
 import { loginBaseFromName } from '../../../shared/account-credentials.js'
 import { translate as tr } from '../../i18n/runtime'
@@ -32,9 +32,6 @@ export default function OwnerUsers() {
   const [editingId, setEditingId] = useState(null)
   const [error, setError] = useState('')
   const [saving, setSaving] = useState(false)
-  const [telegramInvite, setTelegramInvite] = useState('')
-  const [creatingInvite, setCreatingInvite] = useState(false)
-
   const selected = receptionUsers.find((user) => user.id === selectedId) ?? null
 
   useEffect(() => {
@@ -59,20 +56,6 @@ export default function OwnerUsers() {
     setReceptionForm({ name: selected.name, phone: selected.phone || '', role: selected.role, username: selected.username, password: '' })
     setError('')
     setReceptionOpen(true)
-  }
-
-  const createTelegramInvite = async () => {
-    if (!selected || creatingInvite) return
-    setCreatingInvite(true)
-    setError('')
-    try {
-      const invite = await telegram.createInvite({ profileId: selected.id })
-      setTelegramInvite(invite.invite_url)
-    } catch (inviteError) {
-      setError(inviteError.message || 'Telegram ulash havolasini yaratib bo‘lmadi.')
-    } finally {
-      setCreatingInvite(false)
-    }
   }
 
   const submitAdmin = async (e) => {
@@ -130,7 +113,7 @@ export default function OwnerUsers() {
       <>
         <div className="master-detail-head">
           <Avatar name={selected.name} />
-          <div>
+          <div className="master-detail-head-main">
             <h2>{selected.name}</h2>
             <p>@{selected.username}</p>
           </div>
@@ -141,6 +124,7 @@ export default function OwnerUsers() {
           <div className="detail-meta-item"><span>{t('owner.users.role')}</span><strong>{selected.role === 'teacher' ? tr('O‘qituvchi') : tr('Qabulxona')}</strong></div>
           <div className="detail-meta-item"><span>{tr('Telefon')}</span><strong>{selected.phone || '—'}</strong></div>
         </div>
+        <div className="detail-actions">
         <GlowButton
           className="btn-outline btn-sm"
           onClick={() => {
@@ -163,26 +147,8 @@ export default function OwnerUsers() {
         >
         <KeyRound size={14} /> {tr('Parolni tiklash')}
         </GlowButton>
-        {!selected.telegram_id && (
-          <GlowButton className="btn-outline btn-sm" onClick={createTelegramInvite} disabled={creatingInvite}>
-            <Link size={14} /> {creatingInvite ? tr('Tayyorlanmoqda…') : tr('Mini App uchun Telegram havolasi')}
-          </GlowButton>
-        )}
-        {telegramInvite && (
-          <div className="detail-meta-grid">
-            <p className="detail-meta-item">{tr('Havola 15 daqiqa va bir marta ishlaydi.')}</p>
-            <a className="btn btn-outline btn-sm" href={telegramInvite} target="_blank" rel="noreferrer">{tr('Telegram’da ochish')}</a>
-            <GlowButton className="btn-outline btn-sm" onClick={async () => {
-              try {
-                await navigator.clipboard.writeText(telegramInvite)
-              } catch (copyError) {
-                setError(copyError.message || 'Havolani nusxalab bo‘lmadi.')
-              }
-            }}><Copy size={14} /> {tr('Havolani nusxalash')}</GlowButton>
-          </div>
-        )}
         <GlowButton
-          className="btn-danger btn-sm"
+          className="btn-danger btn-sm detail-actions-end"
           onClick={async () => {
             try {
               await staffAccounts.update(selected.id, { is_active: !selected.is_active })
@@ -194,6 +160,7 @@ export default function OwnerUsers() {
         >
           {selected.is_active ? tr('Akkauntni faolsizlantirish') : tr('Akkauntni faollashtirish')}
         </GlowButton>
+        </div>
       </>
     )
   }
@@ -235,10 +202,7 @@ export default function OwnerUsers() {
                   title={receptionUser.name}
                   subtitle={`@${receptionUser.username}`}
                   badge={<StatusBadge tone={receptionUser.is_active ? 'success' : 'danger'}>{receptionUser.is_active ? tr('Faol') : tr('Nofaol')}</StatusBadge>}
-                  onClick={() => {
-                    setSelectedId(receptionUser.id)
-                    setTelegramInvite('')
-                  }}
+                  onClick={() => setSelectedId(receptionUser.id)}
                 />
               ))}
             </>
@@ -278,10 +242,15 @@ export default function OwnerUsers() {
           </div>
           <div className="field">
             <label>{tr('Rol')}</label>
-            <select className="input" value={receptionForm.role} onChange={(e) => setReceptionForm({ ...receptionForm, role: e.target.value })}>
-              <option value="reception">{tr('Qabulxona')}</option>
-              <option value="teacher">{tr('O‘qituvchi')}</option>
-            </select>
+            <Select
+              aria-label={tr('Rol')}
+              value={receptionForm.role}
+              onChange={(e) => setReceptionForm({ ...receptionForm, role: e.target.value })}
+              options={[
+                { value: 'reception', label: tr('Qabulxona') },
+                { value: 'teacher', label: tr('O‘qituvchi') },
+              ]}
+            />
           </div>
           <div className="field">
             <label>{t('common.login')}</label>
